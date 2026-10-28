@@ -172,7 +172,7 @@ test('agent: administrace, schvalování, denní běh a rozpočet', { timeout: 6
 
   // Nastavení agenta se uloží a nepřepíše ho běžné nastavení
   r = await admin({ action: 'setSettings', settings: { agent: { enabled: true, schedule: 'rotate', perDay: 2, budgetUsd: 1, maxJump: 500, searchLimit: 'x' } } });
-  assert.deepEqual(r.body.settings.agent, { enabled: true, schedule: 'rotate', searchLimit: 900, perDay: 2, budgetUsd: 1, maxJump: 90 });
+  assert.deepEqual(r.body.settings.agent, { enabled: true, schedule: 'rotate', rankings: true, searchLimit: 900, perDay: 2, budgetUsd: 1, maxJump: 90 });
 
   // Denní cron: střídá odvětví od posledního místa
   assert.equal((await call('agent', { method: 'GET', headers: {} })).statusCode, 401);
@@ -274,7 +274,7 @@ test('bezplatný bot: Tavily + Gemini, cena musí být v textu, běh 1. den v m�
   };
   // Nábytek: 1. produkt uložen (adresa s lomítkem na konci se toleruje), 2. zamítnut (cena není v textu), 3. zamítnut (zdroj nenalezen)
   STORE.set('meta/agent', { month: new Date().toISOString().slice(0, 7), searches: 0, monthDone: [], monthTries: {}, log: [] });
-  STORE.set('meta/settings', { ...(STORE.get('meta/settings') || {}), agent: { enabled: true, schedule: 'monthly', searchLimit: 900, maxJump: 35 } });
+  STORE.set('meta/settings', { ...(STORE.get('meta/settings') || {}), agent: { enabled: true, schedule: 'monthly', searchLimit: 900, maxJump: 35, rankings: false } });
   const r = await A.runAgentCategory('nabytek', { who: 'test', fetchImpl });
   assert.equal(geminiCalls, 2, '429 → počkat a znovu');
   // Ukázková cena 2 490 → nalezeno 12 345: velký skok čeká na schválení (i to je správně)
@@ -347,4 +347,64 @@ test('bot: OpenRouter jako bezplatné AI', async () => {
   assert.match(err.message, /OpenRouter: účet má záporný zůstatek/);
   delete process.env.OPENROUTER_API_KEY;
   process.env.GEMINI_API_KEY = saved.g;
+});
+
+test('bot: žebříček top 10 – jen ověřené názvy, zachování historie, nové bez ceny dostanou cenu', async () => {
+  const { STORE } = await import(`${P}/tests/fakes/firebase-admin/store.js`);
+  const prod = (id) => STORE.get(`products/${id}`);
+  process.env.TAVILY_API_KEY = 'tvly-test';
+  process.env.GEMINI_API_KEY = 'gem-test';
+  delete process.env.OPENROUTER_API_KEY;
+  STORE.set('meta/settings', { ...(STORE.get('meta/settings') || {}), agent: { enabled: true, schedule: 'monthly', searchLimit: 900, maxJump: 90, rankings: true } });
+  STORE.set('meta/agent', { month: new Date().toISOString().slice(0, 7), searches: 0, monthDone: [], monthTries: {}, rankDone: [], log: [] });
+  const oldIphone = prod('mobily-apple-iphone-17-pro');
+  const histLen = oldIphone.prices.length;
+  // Zdroje žebříčku: 9 skutečných telefonů (z toho nový Nothing Phone 3a a „iPhone 17 Pro“ bez značky)
+  const RANK_TEXT = '1. iPhone 17 Pro 2. Samsung Galaxy A16 3. Samsung Galaxy A36 4. Xiaomi 15T 5. Nothing Phone 3a 6. Google Pixel 10 7. Motorola moto g85 8. Honor 400 Lite 9. Apple iPhone 16e';
+  let rankPrompt = '';
+  const fetchImpl = async (url, opts = {}) => {
+    const json = (o) => ({ ok: true, status: 200, json: async () => o, headers: { get: () => null } });
+    if (url === A.TAVILY_URL) {
+      const q = JSON.parse(opts.body).query;
+      if (/nejprodávanější/.test(q)) return json({ results: [{ url: 'https://www.heureka.cz/nejprodavanejsi-mobily', title: 'Nejprodávanější mobily', content: RANK_TEXT }] });
+      return json({ results: [{ url: 'https://www.alza.cz/x?q=' + encodeURIComponent(q), title: q, content: `${q} za 9 990 Kč` }] });
+    }
+    const body = JSON.parse(opts.body);
+    const prompt = body.contents[0].parts[0].text;
+    if (prompt.startsWith('TASK: RANKING')) {
+      rankPrompt = prompt;
+      assert.match(body.systemInstruction.parts[0].text, /TOP 10/);
+      const names = ['iPhone 17 Pro', 'Samsung Galaxy A16', 'Samsung Galaxy A36', 'Xiaomi 15T', 'Nothing Phone 3a', 'Google Pixel 10', 'Motorola moto g85', 'Honor 400 Lite', 'Apple iPhone 16e', 'Vymyšlený Telefon X'];
+      return json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ top: names.map((n) => ({ name: n, subtitle: n === 'Nothing Phone 3a' ? '256 GB' : '', evidence_url: 'https://www.heureka.cz/nejprodavanejsi-mobily' })) }) }] } }] });
+    }
+    const blocks = prompt.split('### id: ').slice(1);
+    const prices = blocks.map((b) => ({ id: b.split('\n')[0].trim(), price: 9990, source_url: b.match(/\[1\] (\S+)/)[1], source_name: 'Alza.cz' }));
+    return json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ prices }) }] } }] });
+  };
+  const r = await A.runAgentCategory('mobily', { who: 'test', fetchImpl });
+  assert.match(rankPrompt, /Currently tracked: Apple iPhone 17 Pro/);
+  assert.equal(r.rank.found, 9, 'vymyšlený telefon neprošel kontrolou');
+  assert.equal(r.rank.unverified, 1);
+  assert.deepEqual(r.rank.added, ['Nothing Phone 3a']);
+  assert.ok(r.rank.removed.includes('Samsung Galaxy S25') && r.rank.removed.includes('Apple iPhone 15'));
+  const ip = prod('mobily-apple-iphone-17-pro');
+  assert.equal(ip.rank, 1, '„iPhone 17 Pro“ = sledovaný „Apple iPhone 17 Pro“');
+  assert.ok(ip.prices.length >= 1 && ip.prices.length <= histLen + 1);
+  const nothing = prod('mobily-nothing-phone-3a');
+  assert.equal(nothing.rank, 5);
+  assert.equal(nothing.subtitle, '256 GB');
+  assert.equal(nothing.active, true);
+  assert.equal(nothing.prices.at(-1).p, 9990, 'nový produkt hned dostal cenu');
+  assert.match(nothing.demand, /Nejprodávanější podle heureka\.cz/);
+  assert.equal(prod('mobily-samsung-galaxy-s25').active, false);
+  assert.ok(STORE.get('meta/agent').rankDone.includes('mobily'));
+  assert.equal(r.searches, 9, '9 cen; 2 hledání žebříčku se počítají do stavu');
+  assert.equal(STORE.get('meta/agent').searches, 11);
+  // Podruhé v měsíci se žebříček nehledá
+  const r2 = await A.runAgentCategory('mobily', { who: 'test', fetchImpl });
+  assert.equal(r2.rank, undefined);
+  // Méně než 6 ověřených → žebříček beze změny
+  const ap = A.applyRanking('mobily', [...STORE.entries()].filter(([k]) => k.startsWith('products/')).map(([, v]) => v), [{ name: 'X' }, { name: 'Y' }]);
+  assert.equal(ap.kept, true);
+  assert.equal(ap.changed.length, 0);
 });

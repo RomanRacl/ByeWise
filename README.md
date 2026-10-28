@@ -160,6 +160,9 @@ Mění se jen ceny, pořadí v žebříčcích zůstává. Na detailu produktu j
 
 Pro odvětví bez oficiálního zdroje (auta, mobily, elektro, sport, kosmetika, tarify, dovolené, potraviny, energie, nemovitosti, pojištění…) BuyWise jednou měsíčně sám vyhledá aktuální české ceny a uloží je i s odkazem na zdroj.
 
+**Žebříčky top 10 (1× měsíčně, automaticky):** u aut, ojetých aut, knih, elektra, mobilů, sportu, kosmetiky a nábytku bot nejdřív vyhledá aktuální žebříčky prodejnosti (Heureka, Alza, SDA, knihkupectví, články) a sestaví z nich 10 nejprodávanějších produktů. Do žebříčku se dostane jen produkt, jehož název opravdu stojí v nalezených textech; když bot ověří méně než 6 produktů, žebříček se nemění. Stejný produkt pod trochu jiným názvem („iPhone 17 Pro“ × „Apple iPhone 17 Pro“) si zachová historii cen, jiná varianta (Pro × Ultra) je jiný produkt. Nové produkty hned dostanou cenu, vypadlé se skryjí (historie zůstane). Stojí to 2 hledání na odvětví. Vypnout jde v záložce Bot na ceny.
+U tarifů, vstupenek, dovolených, potravin, paliv, energií, nemovitostí a pojištění jde o typy (např. „Povinné ručení“, „Elektřina – 1 MWh“), ne konkrétní výrobky – ty mají pevný seznam a bot jim hledá jen ceny. „Nejvyhledávanější“ v pravém smyslu (objem hledání) zdarma zjistit nejde – Google Trends nemá veřejné API – proto se bere prodejnost.
+
 **Jak funguje:** pro každý produkt jedno vyhledání přes **Tavily** (1 000 hledání měsíčně zdarma, bez karty), bezplatné AI (**OpenRouter** s modelem zdarma, nebo **Gemini** / **Groq**) z nalezených úryvků vytáhne cenu. Celý měsíc je asi 160 hledání.
 
 **Zapnutí (asi 5 minut, zdarma):**

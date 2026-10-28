@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { verifyAdmin, passwordOk, weakAdminPassword } from './_auth.js';
 import { readJson, rateLimit, resetLimit, tooMany, clientIp, signSession, sessionCookie, validId, cleanUrl, clip, imageKind, safeFetch, publicError } from './_security.js';
 import { runUpdate, evaluateAlerts } from './_update.js';
-import { AGENT_CATEGORIES, agentConfigured, agentSettings, agentState, getReview, runAgentCategory, applyResult, provider, providerLabel, missingKeys } from './_agent.js';
+import { AGENT_CATEGORIES, agentConfigured, agentSettings, agentState, getReview, runAgentCategory, applyResult, provider, providerLabel, missingKeys, rankingCategories } from './_agent.js';
 import { seedProducts } from '../public/lib/seed.js';
 import { categoryById } from '../public/lib/categories.js';
 import { merge, parseCsv, applyImport, parseFeed, matchFeedItem, addPoint, applyPriceSheet, parseShops } from '../public/lib/dataops.js';
@@ -258,7 +258,7 @@ async function handle(req, res) {
       }
       case 'agentStatus': {
         const [state, review, settings] = await Promise.all([agentState(), getReview(), getSettings()]);
-        return res.json({ ok: true, configured: agentConfigured(), provider: provider(), label: providerLabel(), missing: missingKeys(), categories: AGENT_CATEGORIES, settings: agentSettings(settings), state, review });
+        return res.json({ ok: true, configured: agentConfigured(), provider: provider(), label: providerLabel(), missing: missingKeys(), rankCategories: provider() === 'free' ? rankingCategories() : [], categories: AGENT_CATEGORIES, settings: agentSettings(settings), state, review });
       }
       case 'agentRun': {
         if (!agentConfigured()) return res.status(400).json({ error: `AI agent není nastavený: na Vercelu chybí ${missingKeys().join(' a ')}. Postup je v záložce AI ceny.` });

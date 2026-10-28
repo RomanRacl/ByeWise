@@ -10,7 +10,8 @@
 //   • velká změna proti poslední ceně jde do fronty ke schválení místo rovnou na web,
 //   • měsíční rozpočet (odhad nákladů) – po jeho vyčerpání agent do konce měsíce nic nespustí.
 import { loadAll, saveProducts, getSettings, getDoc, setDoc } from './_db.js';
-import { todayIso, applyFoundPrice } from '../public/lib/dataops.js';
+import { todayIso, applyFoundPrice, applyImport } from '../public/lib/dataops.js';
+import { slug } from '../public/lib/seed.js';
 import { clean, last } from '../public/lib/analytics.js';
 import { CATEGORIES, categoryById } from '../public/lib/categories.js';
 
@@ -29,6 +30,8 @@ export function agentSettings(settings = {}) {
     enabled: a.enabled !== false,
     // monthly = jednou měsíčně všechna odvětví (1. den), rotate = každý den několik odvětví dokola
     schedule: ['rotate', 'weekly'].includes(a.schedule) ? a.schedule : 'monthly',
+    // Jednou měsíčně najít i aktuální top 10 (jen bezplatná varianta, odvětví s RANK_QUERIES).
+    rankings: a.rankings !== false,
     searchLimit: Math.round(num(a.searchLimit, 50, 100000, DEFAULT_AGENT.searchLimit)),
     perDay: Math.round(num(a.perDay, 0, AGENT_CATEGORIES.length, DEFAULT_AGENT.perDay)),
     budgetUsd: num(a.budgetUsd, 0, 1000, DEFAULT_AGENT.budgetUsd),
@@ -212,12 +215,12 @@ async function postJson(url, headers, body, { fetchImpl, deadline, label }) {
   throw new Error(`${label}: opakovaně přetížené`);
 }
 
-export async function callFreeLLM(prompt, { fetchImpl = fetch, deadline = Date.now() + 120000 } = {}) {
+export async function callFreeLLM(prompt, { fetchImpl = fetch, deadline = Date.now() + 120000, system = FREE_SYSTEM } = {}) {
   if (process.env.GEMINI_API_KEY) {
     const j = await postJson(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL())}:generateContent`,
       { 'x-goog-api-key': process.env.GEMINI_API_KEY },
-      { systemInstruction: { parts: [{ text: FREE_SYSTEM }] }, contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { temperature: 0, maxOutputTokens: 4000, responseMimeType: 'application/json' } },
+      { systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { temperature: 0, maxOutputTokens: 4000, responseMimeType: 'application/json' } },
       { fetchImpl, deadline, label: 'Gemini' }
     );
     return (j.candidates?.[0]?.content?.parts || []).map((x) => x.text || '').join('');
@@ -226,7 +229,7 @@ export async function callFreeLLM(prompt, { fetchImpl = fetch, deadline = Date.n
     const j = await postJson(
       'https://openrouter.ai/api/v1/chat/completions',
       { authorization: `Bearer ${orKey()}`, 'HTTP-Referer': process.env.SITE_URL || 'https://buywise.vercel.app', 'X-Title': 'BuyWise' },
-      { models: OPENROUTER_MODELS(), temperature: 0, max_tokens: 4000, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: FREE_SYSTEM }, { role: 'user', content: prompt }] },
+      { models: OPENROUTER_MODELS(), temperature: 0, max_tokens: 4000, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] },
       { fetchImpl, deadline, label: 'OpenRouter' }
     );
     if (j.error) throw new Error(`OpenRouter: ${j.error.message || 'chyba modelu'}`);
@@ -235,7 +238,7 @@ export async function callFreeLLM(prompt, { fetchImpl = fetch, deadline = Date.n
   const j = await postJson(
     'https://api.groq.com/openai/v1/chat/completions',
     { authorization: `Bearer ${process.env.GROQ_API_KEY}` },
-    { model: GROQ_MODEL(), temperature: 0, max_completion_tokens: 4000, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: FREE_SYSTEM }, { role: 'user', content: prompt }] },
+    { model: GROQ_MODEL(), temperature: 0, max_completion_tokens: 4000, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] },
     { fetchImpl, deadline, label: 'Groq' }
   );
   return j.choices?.[0]?.message?.content || '';
@@ -287,6 +290,126 @@ async function freeCategory(category, list, opts = {}) {
   const raw = parseFreeAnswer(answer);
   if (!raw) throw Object.assign(new Error('Odpověď AI neobsahuje platná data'), { searches });
   return { raw, searches, texts };
+}
+
+// ================= Žebříčky: 10 nejžádanějších produktů v odvětví =================
+// Jednou měsíčně bot vyhledá aktuální žebříčky prodejnosti (Heureka, Alza, SDA, knihkupectví, srovnávače)
+// a sestaví z nich top 10. Odvětví bez RANK_QUERIES (pojištění, energie, tarify…) mají pevný seznam typů.
+const MONTHS = ['leden', 'únor', 'březen', 'duben', 'květen', 'červen', 'červenec', 'srpen', 'září', 'říjen', 'listopad', 'prosinec'];
+export const RANK_QUERIES = {
+  auta: ['nejprodávanější nová auta v Česku {mesic} {rok} registrace SDA', 'nejregistrovanější modely osobních aut {rok} Česko žebříček'],
+  ojete: ['nejprodávanější ojetá auta v Česku {rok}', 'nejžádanější ojetá auta {rok} žebříček bazar'],
+  knihy: ['nejprodávanější knihy {mesic} {rok} žebříček Kosmas Knihy Dobrovský', 'TOP 10 nejprodávanějších knih týden {rok}'],
+  elektro: ['nejprodávanější elektronika {rok} Alza Heureka žebříček', 'nejprodávanější televize sluchátka vysavače {rok} Česko'],
+  mobily: ['nejprodávanější mobilní telefony {mesic} {rok} Česko', 'nejprodávanější mobily {rok} Heureka Alza žebříček'],
+  sport: ['nejprodávanější sportovní vybavení {rok} Česko', 'nejprodávanější sporttestery kola běžecké boty {rok}'],
+  kosmetika: ['nejprodávanější parfémy {rok} Notino žebříček', 'nejprodávanější kosmetika {rok} Česko drogerie'],
+  nabytek: ['nejprodávanější nábytek IKEA {rok} Česko', 'nejprodávanější matrace sedačky kancelářské židle {rok}'],
+};
+export const rankingCategories = () => Object.keys(RANK_QUERIES);
+const fold = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const nameTokens = (n) => fold(n).split(' ').filter((w) => w.length >= 2 || /\d/.test(w));
+// Název musí v nalezených textech opravdu být (všechna slova), jinak si ho AI mohla vymyslet.
+export const nameInText = (name, text) => {
+  const hay = ` ${fold(text)} `;
+  const toks = nameTokens(name);
+  return toks.length > 0 && toks.every((w) => hay.includes(` ${w} `));
+};
+// Stejný produkt pod trochu jiným názvem (např. „Škoda Octavia“ × „Octavia“) → zachovat historii.
+const VARIANT_WORDS = new Set(['pro', 'max', 'plus', 'ultra', 'mini', 'lite', 'fe', 'neo', 'edge', 'air', 'prime', 'xl', 'xxl', 'combi', 'kombi', 'sportline', 'rs', 'gt', 'gti', 'se', 'slim']);
+export function sameProduct(a, b) {
+  const x = nameTokens(a), y = nameTokens(b);
+  if (!x.length || !y.length) return false;
+  const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+  if (!short.every((w) => long.includes(w))) return false;
+  // Navíc smí být jen značka (Apple, Škoda…), ne jiná varianta (Pro, Ultra) ani jiné číslo (256, 5G).
+  return long.filter((w) => !short.includes(w)).every((w) => !VARIANT_WORDS.has(w) && !/\d/.test(w));
+}
+
+export function buildRankPrompt(category, current, results) {
+  const c = categoryById(category);
+  return `TASK: RANKING\nCategory: ${c?.name || category}${c?.sourceNote ? ` (${c.sourceNote})` : ''}\nToday: ${todayIso()}\nCurrently tracked: ${current.map((p) => p.name).join('; ') || '—'}\n\nSearch results:\n` +
+    results.map((r, i) => `[${i + 1}] ${r.url}\n${r.title}\n${r.content.replace(/\s+/g, ' ')}`).join('\n');
+}
+const RANK_SYSTEM = `You build a TOP 10 of the most wanted (best-selling / most popular) products in one category in the Czech Republic for BuyWise, using ONLY the given search results.
+Rules:
+- Use only products whose name is written in the search results. Never add products from your own knowledge.
+- Order by popularity as stated in the sources (sales charts, registrations, bestseller lists). Prefer the newest data.
+- Use specific product names (brand + model), not generic types. One entry per product (no colour/size duplicates).
+- If a currently tracked product is the same product, reuse its exact name.
+- "subtitle": short variant info if the sources give it (e.g. "256 GB", "EDP 100 ml", "1.5 TSI"), otherwise "".
+- "evidence_url": the URL of the result that mentions the product.
+Reply with JSON only: {"top":[{"name":"…","subtitle":"…","evidence_url":"…"}]} with up to 10 items.`;
+
+async function callRankLLM(prompt, opts) {
+  // Stejné bezplatné AI jako u cen, jen jiné zadání.
+  return callFreeLLM(prompt, { ...opts, system: RANK_SYSTEM });
+}
+
+export async function rankCategory(category, products, opts = {}) {
+  const queries = RANK_QUERIES[category];
+  if (!queries) return null;
+  const d = new Date();
+  const fill = (q) => q.replace('{mesic}', MONTHS[d.getMonth()]).replace('{rok}', String(d.getFullYear()));
+  let searches = 0;
+  const results = [];
+  for (const q of queries) {
+    searches++;
+    try {
+      results.push(...(await tavilySearch(fill(q), opts)));
+    } catch (e) {
+      if (e.budget) throw Object.assign(e, { searches });
+    }
+  }
+  if (!results.length) throw Object.assign(new Error('Žebříček: vyhledávání nic nenašlo'), { searches });
+  const current = products.filter((p) => p.category === category && p.active !== false).sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
+  const text = await callRankLLM(buildRankPrompt(category, current, results), { fetchImpl: opts.fetchImpl, deadline: Date.now() + 90000 });
+  let top;
+  try {
+    const t = String(text);
+    top = JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1)).top;
+  } catch {}
+  if (!Array.isArray(top)) throw Object.assign(new Error('Žebříček: odpověď AI neobsahuje platná data'), { searches });
+  const all = results.map((r) => `${r.title} ${r.content}`).join(' ');
+  const seen = new Set();
+  const ranked = [];
+  const dropped = [];
+  for (const x of top) {
+    const name = String(x?.name || '').trim().slice(0, 120);
+    if (!name) continue;
+    if (!nameInText(name, all)) {
+      dropped.push(name);
+      continue;
+    }
+    // Sjednotit se sledovaným produktem (zachová historii cen i ID).
+    const prev = products.find((p) => p.category === category && sameProduct(p.name, name));
+    const finalName = prev ? prev.name : name;
+    const key = slug(finalName);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ranked.push({ name: finalName, subtitle: prev ? prev.subtitle || '' : String(x.subtitle || '').trim().slice(0, 80), url: httpsUrl(x.evidence_url), prev });
+    if (ranked.length === 10) break;
+  }
+  return { ranked, dropped, searches };
+}
+
+// Použije žebříček: nové produkty přidá (bez ceny – tu hned dohledá cenový krok), vypadlé označí jako mimo žebříček.
+// Když AI najde méně než 6 ověřených produktů, žebříček se nemění (raději starý než polovičatý).
+export function applyRanking(category, products, ranked) {
+  if (!ranked || ranked.length < 6) return { changed: [], added: [], removed: [], kept: true };
+  const inCat = products.filter((p) => p.category === category);
+  const unit = inCat.find((p) => p.unit)?.unit || 'Kč';
+  const rows = ranked.map((r, i) => ({ name: r.name, subtitle: r.subtitle, rank: i + 1, demand: r.prev?.demand || (r.url ? `Nejprodávanější podle ${new URL(r.url).hostname.replace(/^www\./, '')}` : ''), unit }));
+  const out = applyImport(inCat, category, rows).map((p) => {
+    const prev = inCat.find((x) => x.id === p.id);
+    // merge() ruší štítek „ukázka“ – tady se ale cena nemění, takže ukázkový produkt zůstává ukázkový.
+    // Šipky v žebříčku: předchozí pořadí = pořadí před tímto měsícem (stejné → bez šipky, dřív mimo → „nové“).
+    const prevRank = prev && prev.active !== false ? prev.rank ?? null : null;
+    return prev ? { ...p, prevRank, sample: !!prev.sample, source: prev.source, sourceUrl: prev.sourceUrl } : { ...p, prevRank: null, sample: false, source: '', sourceUrl: '' };
+  });
+  const added = out.filter((p) => !inCat.some((x) => x.id === p.id)).map((p) => p.name);
+  const removed = inCat.filter((x) => x.active !== false && !out.some((p) => p.id === x.id && p.active !== false)).map((p) => p.name);
+  return { changed: out, added, removed, kept: false };
 }
 
 // Adresy, které se opravdu objevily ve výsledcích hledání nebo v citacích.
@@ -420,8 +543,8 @@ export async function agentCategory(category, products, opts = {}) {
 const month = () => todayIso().slice(0, 7);
 export async function agentState() {
   const s = (await getDoc('meta/agent')) || {};
-  if (s.month !== month()) Object.assign(s, { month: month(), costUsd: 0, searches: 0, runs: 0, monthDone: [], monthTries: {}, periodKey: null });
-  return { cursor: 0, log: [], lastByCategory: {}, monthDone: [], monthTries: {}, ...s };
+  if (s.month !== month()) Object.assign(s, { month: month(), costUsd: 0, searches: 0, runs: 0, monthDone: [], monthTries: {}, periodKey: null, rankDone: [] });
+  return { cursor: 0, log: [], lastByCategory: {}, monthDone: [], monthTries: {}, rankDone: [], ...s };
 }
 export async function getReview() {
   return (await getDoc('meta/agentReview'))?.items || [];
@@ -438,7 +561,29 @@ export async function runAgentCategory(category, { who = 'cron', settings, state
   if (provider() === 'claude' && cfg.budgetUsd && state.costUsd >= cfg.budgetUsd) throw Object.assign(new Error(`Měsíční rozpočet AI agenta ($${cfg.budgetUsd}) je vyčerpaný`), { budget: true });
   products = products || (await loadAll({ includeInactive: true }));
   let r;
+  let rank = null;
   try {
+    // 1) Žebříček (1× měsíčně): kdo je teď top 10.
+    if (cfg.rankings && provider() === 'free' && RANK_QUERIES[category] && !(state.rankDone || []).includes(category)) {
+     try {
+      const rk = await rankCategory(category, products, { fetchImpl });
+      state.searches += rk.searches;
+      const ap = applyRanking(category, products, rk.ranked);
+      if (ap.changed.length) {
+        await saveProducts(ap.changed);
+        const ids = new Set(ap.changed.map((p) => p.id));
+        products = products.filter((p) => !ids.has(p.id)).concat(ap.changed);
+      }
+      state.rankDone = [...new Set([...(state.rankDone || []), category])];
+      rank = { added: ap.added, removed: ap.removed, kept: ap.kept, found: rk.ranked.length, unverified: rk.dropped.length };
+     } catch (e) {
+      // Žebříček se nepovedl → ceny se i tak dohledají u stávajících produktů, žebříček se zkusí příště.
+      if (e.budget) throw e;
+      state.searches += e.searches || 0;
+      rank = { error: e.message };
+     }
+    }
+    // 2) Ceny produktů v žebříčku.
     r = await agentCategory(category, products, { maxJump: cfg.maxJump, fetchImpl });
   } catch (e) {
     state.costUsd += e.cost || 0;
@@ -458,7 +603,7 @@ export async function runAgentCategory(category, { who = 'cron', settings, state
   state.runs += 1;
   state.monthDone = [...new Set([...(state.monthDone || []), category])];
   state.lastByCategory = { ...state.lastByCategory, [category]: new Date().toISOString() };
-  const entry = { at: new Date().toISOString(), category, who, updated: r.count, review: r.review.length, rejected: r.rejected.length, missing: r.missing?.length || 0, searches: r.searches || 0, cost: Math.round(r.cost * 1000) / 1000 };
+  const entry = { at: new Date().toISOString(), category, who, ...(rank ? { rank } : {}), updated: r.count, review: r.review.length, rejected: r.rejected.length, missing: r.missing?.length || 0, searches: r.searches || 0, cost: Math.round(r.cost * 1000) / 1000 };
   state.log = [entry, ...state.log].slice(0, 40);
   await setDoc('meta/agent', state, false);
   return { ...entry, rejectedList: r.rejected, products: r.products.map((p) => ({ id: p.id, name: p.name, price: last(p.prices)?.p, source: p.source, url: p.sourceUrl })), reviewList: r.review };

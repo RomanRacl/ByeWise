@@ -7998,6 +7998,9 @@ async function tabSettings(pane) {
 // ---------- AI ceny ----------
 // Agent dohledá aktuální ceny na webu (Claude API s vyhledáváním). Každé odvětví je jeden požadavek
 // (30–90 s), proto „Dohledat vše“ běží v prohlížeči postupně a ukazuje průběh.
+// Shrnutí změn žebříčku v záznamu běhu.
+const rankText = (rk) =>
+  !rk ? '' : rk.error ? `žebříček: <span class="err">${esc(rk.error)}</span> · ` : rk.kept ? `žebříček beze změny (ověřeno jen ${rk.found} produktů) · ` : `žebříček: ${rk.added.length ? `nové ${esc(rk.added.join(', '))}` : 'bez nových'}${rk.removed.length ? `, vypadly ${esc(rk.removed.join(', '))}` : ''} · `;
 const usd = (x) => '$' + (Math.round((x || 0) * 100) / 100).toLocaleString('cs-CZ', { minimumFractionDigits: 2 });
 async function tabAgent(pane) {
   pane.innerHTML = '<p class="muted">Načítám…</p>';
@@ -8034,6 +8037,7 @@ async function tabAgent(pane) {
       </div>
       <form id="agform" class="grid2">
         <label class="field inline"><input type="checkbox" name="enabled" ${cfg.enabled ? 'checked' : ''}> Hledat ceny automaticky</label>
+        ${free ? `<label class="field inline"><input type="checkbox" name="rankings" ${cfg.rankings ? 'checked' : ''}> Jednou měsíčně najít i aktuální top 10 (${(a.rankCategories || []).map(catLabel).join(', ')})</label>` : ''}
         <label class="field">Kdy<select name="schedule"><option value="monthly" ${cfg.schedule === 'monthly' ? 'selected' : ''}>1. den v měsíci – všechna odvětví</option><option value="weekly" ${cfg.schedule === 'weekly' ? 'selected' : ''}>Každý týden (1., 8., 15. a 22. den) – všechna odvětví</option><option value="rotate" ${cfg.schedule === 'rotate' ? 'selected' : ''}>Každý den několik odvětví dokola</option></select><small class="muted">${cfg.schedule === 'rotate' ? '' : `co se nestihne, bot dodělá další ráno · měsíčně asi ${(cfg.schedule === 'weekly' ? 4 : 1) * a.categories.length * 10} hledání`}</small></label>
         <label class="field" ${cfg.schedule === 'rotate' ? '' : 'style="display:none"'} data-rot>Odvětví za den<input name="perDay" type="number" min="0" max="${a.categories.length}" value="${cfg.perDay}"></label>
         ${free ? `<label class="field">Max. hledání za měsíc<input name="searchLimit" type="number" min="50" step="10" value="${cfg.searchLimit}"><small class="muted">1 produkt = 1 hledání, jeden běh ≈ ${a.categories.length * 10}</small></label>` : `<label class="field">Měsíční rozpočet ($)<input name="budgetUsd" type="number" min="0" step="1" value="${cfg.budgetUsd}"><small class="muted">po vyčerpání se agent do konce měsíce zastaví</small></label>`}
@@ -8047,7 +8051,7 @@ async function tabAgent(pane) {
       <p class="small muted">${free ? 'Jedno odvětví trvá zhruba 20–60 sekund a spotřebuje asi 10 hledání.' : 'Jedno odvětví trvá zhruba 30–90 sekund a stojí v řádu desítek centů.'} Nech stránku otevřenou, dokud běh neskončí.</p>
       <div id="agprog"></div></div>
     <div class="card" id="agreview"></div>
-    <div class="card"><h3>Poslední běhy</h3>${st.log?.length ? `<ul class="adm-list">${st.log.slice(0, 16).map((l) => `<li><span class="nm">${esc(catLabel(l.category))}<small>${when(l.at)}, ${esc(l.who)} – ${l.error ? `<span class="err">${esc(l.error)}</span>` : `${l.updated} cen uloženo, ${l.review} ke schválení, ${l.missing + l.rejected} nenalezeno${free ? `, ${l.searches ?? 0} hledání` : `, ${usd(l.cost)}`}`}</small></span></li>`).join('')}</ul>` : '<p class="small muted">Zatím žádný běh.</p>'}
+    <div class="card"><h3>Poslední běhy</h3>${st.log?.length ? `<ul class="adm-list">${st.log.slice(0, 16).map((l) => `<li><span class="nm">${esc(catLabel(l.category))}<small>${when(l.at)}, ${esc(l.who)} – ${l.error ? `<span class="err">${esc(l.error)}</span>` : `${rankText(l.rank)}${l.updated} cen uloženo, ${l.review} ke schválení, ${l.missing + l.rejected} nenalezeno${free ? `, ${l.searches ?? 0} hledání` : `, ${usd(l.cost)}`}`}</small></span></li>`).join('')}</ul>` : '<p class="small muted">Zatím žádný běh.</p>'}
       <details class="more"><summary>Kdy bylo které odvětví naposledy</summary><ul class="small">${a.categories.map((c) => `<li>${esc(catLabel(c))}: ${when(st.lastByCategory?.[c])}</li>`).join('')}</ul></details></div>`;
   pane.querySelector('#agform [name=schedule]').addEventListener('change', (e) => (pane.querySelector('[data-rot]').style.display = e.target.value === 'rotate' ? '' : 'none'));
 
@@ -8074,7 +8078,7 @@ async function tabAgent(pane) {
       const sm = rows.lastElementChild.querySelector('small');
       try {
         const { result: r } = await adminApi('agentRun', { category: c });
-        sm.innerHTML = `${r.updated} cen uloženo${r.review ? `, ${r.review} ke schválení` : ''}${r.missing + r.rejected ? `, ${r.missing + r.rejected} nenalezeno` : ''} · ${free ? `${r.searches} hledání` : usd(r.cost)}${r.products.length ? `<br>${r.products.slice(0, 12).map((p) => `${esc(p.name)}: <b>${money(p.price)}</b>`).join(' · ')}` : ''}`;
+        sm.innerHTML = `${rankText(r.rank)}${r.updated} cen uloženo${r.review ? `, ${r.review} ke schválení` : ''}${r.missing + r.rejected ? `, ${r.missing + r.rejected} nenalezeno` : ''} · ${free ? `${r.searches} hledání` : usd(r.cost)}${r.products.length ? `<br>${r.products.slice(0, 12).map((p) => `${esc(p.name)}: <b>${money(p.price)}</b>`).join(' · ')}` : ''}`;
       } catch (err) {
         sm.innerHTML = `<span class="err">${esc(err.message)}</span>`;
         if (/rozpočet|limit hledání|vyčerpaný|_API_KEY|neplatný/.test(err.message)) break;
@@ -8092,7 +8096,7 @@ async function tabAgent(pane) {
     const f = e.target;
     try {
       const { settings } = await adminApi('getSettings');
-      const agent = { ...cfg, enabled: f.enabled.checked, schedule: f.schedule.value, perDay: +f.perDay.value, maxJump: +f.maxJump.value };
+      const agent = { ...cfg, ...(f.rankings ? { rankings: f.rankings.checked } : {}), enabled: f.enabled.checked, schedule: f.schedule.value, perDay: +f.perDay.value, maxJump: +f.maxJump.value };
       if (f.searchLimit) agent.searchLimit = +f.searchLimit.value;
       if (f.budgetUsd) agent.budgetUsd = +f.budgetUsd.value;
       await adminApi('setSettings', { settings: { ...settings, agent } });
