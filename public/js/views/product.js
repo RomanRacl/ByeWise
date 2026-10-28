@@ -1,7 +1,7 @@
 import {
   S, categoryById, catName, catNote, catDemandLabel, byCat, sum, analysis, fullProduct, productById, money, pct, pctClass, esc, chip, priceText,
   productLink, catLink, link, ICON, monthName, dateFmt, nf, decimals, conv, unitOf, toast, downloadFile, toCsv, slugFile, affiliateUrl, hero, sheet,
-  insight, scoreBadge, scoreWhen,
+  insight, scoreBadge, scoreWhen, safeHref,
 } from '../core.js';
 import { shareCard } from '../share.js';
 import { lineChart, seasonBars, svgToPng, T } from '../chart.js';
@@ -306,7 +306,7 @@ export async function renderProduct(main, id) {
     heroHtml +
     sheet(`${scorePanel}${verdict}${discountBlock}${chartCard}${savings}${figures}
       <div class="acc-list section">${sections.join('')}</div>
-      <p class="note src">${t('Zdroj:')} ${esc((p.source || catNote(c)).replace(/\.$/, ''))}${affiliateUrl(p.link) ? `. <a href="${esc(affiliateUrl(p.link))}" target="_blank" rel="noopener noreferrer sponsored">${t('Otevřít u prodejce')}</a>` : ''}. ${t('Naposledy upraveno {d}.', { d: p.updatedAt ? dateFmt(p.updatedAt.slice(0, 10)) : '—' })}</p>`);
+      <p class="note src">${t('Zdroj:')} ${esc((p.source || catNote(c)).replace(/\.$/, ''))}${safeHref(p.sourceUrl) ? ` (<a href="${esc(safeHref(p.sourceUrl))}" target="_blank" rel="noopener noreferrer">${t('stránka se zdrojem ceny')}</a>)` : ''}${affiliateUrl(p.link) ? `. <a href="${esc(affiliateUrl(p.link))}" target="_blank" rel="noopener noreferrer sponsored">${t('Otevřít u prodejce')}</a>` : ''}. ${t('Naposledy upraveno {d}.', { d: p.updatedAt ? dateFmt(p.updatedAt.slice(0, 10)) : '—' })}</p>`);
 
   // ---------- Kreslení ----------
   const toPts = (arr) => arr.map((x) => ({ t: T(x.d), v: conv(x.p, u).v }));

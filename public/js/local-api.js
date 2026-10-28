@@ -17,7 +17,7 @@ export function loadLocalData() {
 import { S, store } from './core.js';
 import { categoryById } from '../lib/categories.js';
 import { demoProducts, seedProducts } from '../lib/seed.js';
-import { merge, parseCsv, applyImport } from '../lib/dataops.js';
+import { merge, parseCsv, applyImport, applyPriceSheet } from '../lib/dataops.js';
 
 export const adminAuth = { session: true, useGoogle: false };
 export const adminLogin = async () => {};
@@ -76,6 +76,15 @@ export async function adminApi(action, payload = {}) {
       S.data.products = all.filter((p) => !ids.has(p.id)).concat(out);
       persistLocal(['import', cat.id, `${rows.length} řádků (${payload.source || 'CSV'})`]);
       return { ok: true, imported: rows.length };
+    }
+    case 'listAll':
+      return { ok: true, products: all };
+    case 'importPrices': {
+      const { updated, unknown } = applyPriceSheet(all, payload.rows || []);
+      const ids = new Set(updated.map((p) => p.id));
+      S.data.products = all.filter((p) => !ids.has(p.id)).concat(updated);
+      persistLocal(['měsíční souhrn cen', '', `${updated.length} cen`]);
+      return { ok: true, updated: updated.length, unknown };
     }
     case 'seed':
       S.data.products = demoProducts();

@@ -1,5 +1,5 @@
 // Service worker: offline režim (aplikace + poslední stažená data) a push notifikace hlídačů.
-const VERSION = 'pm-v6';
+const VERSION = 'pm-v10';
 const SHELL = [
   '/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png',
   '/lib/analytics.js', '/lib/categories.js', '/lib/seed.js', '/lib/dataops.js',

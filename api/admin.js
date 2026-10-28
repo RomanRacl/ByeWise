@@ -5,9 +5,10 @@ import { randomUUID } from 'node:crypto';
 import { verifyAdmin, passwordOk, weakAdminPassword } from './_auth.js';
 import { readJson, rateLimit, resetLimit, tooMany, clientIp, signSession, sessionCookie, validId, cleanUrl, clip, imageKind, safeFetch, publicError } from './_security.js';
 import { runUpdate, evaluateAlerts } from './_update.js';
+import { AGENT_CATEGORIES, agentConfigured, agentSettings, agentState, getReview, runAgentCategory, applyResult, provider, providerLabel, missingKeys } from './_agent.js';
 import { seedProducts } from '../public/lib/seed.js';
 import { categoryById } from '../public/lib/categories.js';
-import { merge, parseCsv, applyImport, parseFeed, matchFeedItem, addPoint } from '../public/lib/dataops.js';
+import { merge, parseCsv, applyImport, parseFeed, matchFeedItem, addPoint, applyPriceSheet, parseShops } from '../public/lib/dataops.js';
 
 const describe = (p) => `${p.name}${p.prices?.length ? `, cena ${p.prices[p.prices.length - 1].p}` : ''}${p.rank ? `, ${p.rank}. místo` : ''}`;
 
@@ -39,6 +40,7 @@ export function sanitizeSettings(s = {}) {
       .map((f) => ({ url: cleanUrl(f?.url, { max: 2000 }), category: String(f?.category || ''), competitor: clip(f?.competitor, 60).trim(), mainPrice: f?.mainPrice !== false }))
       .filter((f) => f.url && categoryById(f.category) && f.competitor)
       .slice(0, 40),
+    agent: agentSettings(s),
   };
 }
 
@@ -235,6 +237,57 @@ async function handle(req, res) {
         await deleteDoc('meta/pending');
         await audit(who, body.action === 'approve' ? 'schválení pořadí' : 'zamítnutí pořadí', '', `${pending.proposals.length} změn`);
         return res.json({ ok: true, applied });
+      }
+      case 'listAll': {
+        // Lehký seznam všech produktů pro šablonu měsíčního souhrnu cen a náhled importu.
+        const all = await loadAll({ includeInactive: true });
+        return res.json({ ok: true, products: all.map((p) => ({ id: p.id, category: p.category, name: p.name, subtitle: p.subtitle || '', unit: p.unit, rank: p.rank ?? null, active: p.active !== false, sample: !!p.sample, prices: (p.prices || []).slice(-1) })) });
+      }
+      case 'importPrices': {
+        const rows = (Array.isArray(body.rows) ? body.rows : [])
+          .slice(0, 1000)
+          .filter((r) => r && validId(r.id) && Number.isFinite(+r.price) && +r.price > 0 && +r.price < 1e10)
+          .map((r) => ({ id: r.id, price: +r.price, source: clip(r.source, 80), url: cleanUrl(r.url), date: /^\d{4}-\d{2}-\d{2}$/.test(r.date || '') ? r.date : '', shops: parseShops((Array.isArray(r.shops) ? r.shops : []).map((x) => `${String(x?.name || '').replace(/[=|]/g, ' ')}=${x?.price}=${cleanUrl(x?.url)}`).join('|')) }));
+        if (!rows.length) return res.status(400).json({ error: 'Žádné platné řádky s ID a cenou' });
+        const all = await loadAll({ includeInactive: true });
+        const { updated, unknown } = applyPriceSheet(all, rows);
+        if (updated.length) await saveProducts(updated);
+        await audit(who, 'měsíční souhrn cen', '', `${updated.length} cen${unknown.length ? `, neznámá ID: ${unknown.length}` : ''}`);
+        await afterSave(updated.map((p) => p.id));
+        return res.json({ ok: true, updated: updated.length, unknown });
+      }
+      case 'agentStatus': {
+        const [state, review, settings] = await Promise.all([agentState(), getReview(), getSettings()]);
+        return res.json({ ok: true, configured: agentConfigured(), provider: provider(), label: providerLabel(), missing: missingKeys(), categories: AGENT_CATEGORIES, settings: agentSettings(settings), state, review });
+      }
+      case 'agentRun': {
+        if (!agentConfigured()) return res.status(400).json({ error: `AI agent není nastavený: na Vercelu chybí ${missingKeys().join(' a ')}. Postup je v záložce AI ceny.` });
+        const lim = await rateLimit('agent', 'admin', { limit: 40, windowSec: 3600 });
+        if (!lim.ok) return tooMany(res, lim.retryAfter);
+        try {
+          const r = await runAgentCategory(String(body.category || ''), { who });
+          await audit(who, 'AI ceny', body.category, `${r.updated} cen, ${r.review} ke schválení${provider() === 'claude' ? `, $${r.cost}` : ''}`);
+          return res.json({ ok: true, result: r });
+        } catch (e) {
+          return res.status(e.budget ? 402 : 502).json({ error: e.message });
+        }
+      }
+      case 'agentApprove':
+      case 'agentReject': {
+        const ids = new Set((Array.isArray(body.ids) ? body.ids : []).filter(validId));
+        const queue = await getReview();
+        const picked = queue.filter((x) => ids.has(x.id));
+        if (body.action === 'agentApprove') {
+          const out = [];
+          for (const x of picked) {
+            const p = await getProduct(x.id);
+            if (p) out.push(applyResult(p, x));
+          }
+          if (out.length) await saveProducts(out);
+        }
+        await setDoc('meta/agentReview', { items: queue.filter((x) => !ids.has(x.id)) }, false);
+        await audit(who, body.action === 'agentApprove' ? 'schválení AI cen' : 'zamítnutí AI cen', '', picked.map((x) => `${x.name}: ${x.old} → ${x.price}`).join('; ').slice(0, 400));
+        return res.json({ ok: true, applied: body.action === 'agentApprove' ? picked.length : 0 });
       }
       case 'backup': {
         const [products, settings] = await Promise.all([loadAll({ includeInactive: true }), getSettings()]);

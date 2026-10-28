@@ -1,7 +1,7 @@
 // Administrace (česky): produkty, hromadné úpravy, importy, nastavení, schvalování, historie, data.
 import { S, CATEGORIES, categoryById, esc, money, dateFmt, link, toast, downloadFile, store } from '../core.js';
 import { clean } from '../../lib/analytics.js';
-import { parseCsv, parseRankingText, parseSda, parseAffiliateRules } from '../../lib/dataops.js';
+import { parseCsv, parseRankingText, parseSda, parseAffiliateRules, parsePriceSheet, priceSheetCsv } from '../../lib/dataops.js';
 import { adminApi, adminAuth, adminLocal, adminLogin, adminLogout } from '../admin-api.js';
 import { login, authAvailable } from '../user.js';
 import { actions } from '../ui.js';
@@ -124,7 +124,7 @@ export async function renderAdmin(main) {
     return true;
   }
 
-  const tabs = [['produkty', 'Produkty'], ['import', 'Import'], ['nastaveni', 'Nastavení'], ...(adminLocal ? [] : [['schvalovani', 'Schvalování']]), ['historie', 'Historie úprav'], ['data', 'Data a zálohy']];
+  const tabs = [['produkty', 'Produkty'], ['import', 'Import'], ['nastaveni', 'Nastavení'], ...(adminLocal ? [] : [['ai', 'Bot na ceny'], ['schvalovani', 'Schvalování']]), ['historie', 'Historie úprav'], ['data', 'Data a zálohy']];
   main.innerHTML =
     hero({
       title: adminLocal ? 'Úpravy dat' : 'Administrace',
@@ -168,7 +168,7 @@ export async function renderAdmin(main) {
 }
 
 function showTab(pane) {
-  ({ produkty: tabProducts, import: tabImport, nastaveni: tabSettings, schvalovani: tabPending, historie: tabAudit, data: tabData }[adm.tab] || tabProducts)(pane);
+  ({ produkty: tabProducts, import: tabImport, nastaveni: tabSettings, ai: tabAgent, schvalovani: tabPending, historie: tabAudit, data: tabData }[adm.tab] || tabProducts)(pane);
 }
 
 // ---------- Produkty ----------
@@ -358,7 +358,16 @@ function openBulk(pane, products) {
 
 // ---------- Import ----------
 function tabImport(pane) {
-  pane.innerHTML = `<div class="card">
+  pane.innerHTML = `<div class="card" id="monthly"><h3>Měsíční souhrn cen (všechna odvětví)</h3>
+    <ol class="small steps">
+      <li>Stáhni <b>seznam produktů</b> a pošli ho Claudovi s prosbou „udělej mi souhrn cen“.</li>
+      <li>Claude dohledá aktuální ceny a vrátí vyplněný soubor (sloupce cena, zdroj, odkaz, datum, prodejci).</li>
+      <li>Ten soubor nahraj sem, zkontroluj náhled a ulož. Mění se jen ceny, pořadí v žebříčcích zůstává.</li>
+    </ol>
+    <div class="btns"><button class="btn alt" data-action="adm-sheet">Stáhnout seznam produktů</button><label class="btn alt" for="mfile">Nahrát souhrn cen</label><input type="file" id="mfile" accept=".csv,.txt,.xlsx,.xls" hidden></div>
+    <details class="more"><summary>Nebo vložit jako text</summary><label class="field"><span class="sr-only">Souhrn cen</span><textarea id="mtext" rows="5" placeholder="id;cena;zdroj;odkaz;datum;prodejci"></textarea></label><div class="btns"><button class="btn alt" data-action="adm-mprev">Načíst náhled</button></div></details>
+    <div id="mpreview"></div><p class="msg" id="mmsg"></p></div>
+  <div class="card"><h3>Žebříček jednoho odvětví</h3>
     <label class="field">Do odvětví<select id="icat">${catOptions(adm.cat)}</select></label>
     <span class="seg" role="group" aria-label="Typ importu" style="margin-top:12px">
       <button type="button" data-action="adm-src" data-src="csv" aria-pressed="true">CSV / Excel</button>
@@ -370,6 +379,69 @@ function tabImport(pane) {
     <label class="field">Text<textarea id="itext"></textarea></label>
     <div class="btns"><button class="btn alt" data-action="adm-iprev">Načíst náhled</button></div>
     <div id="ipreview"></div><p class="msg" id="imsg"></p></div>`;
+  // ---- Měsíční souhrn cen ----
+  let mrows = [];
+  const mbox = pane.querySelector('#mpreview');
+  const mmsg = pane.querySelector('#mmsg');
+  const loadList = async () => (await adminApi('listAll')).products;
+  const mpreview = async (text) => {
+    mrows = parsePriceSheet(text);
+    if (!mrows.length) {
+      mbox.innerHTML = '';
+      return msg(mmsg, 'V souboru nejsou řádky s ID a cenou. Je to soubor ze „Stáhnout seznam produktů“ s vyplněným sloupcem cena?');
+    }
+    msg(mmsg, '', true);
+    const byId = new Map((await loadList()).map((p) => [p.id, p]));
+    const unknown = mrows.filter((r) => !byId.has(r.id));
+    let big = 0;
+    const body = mrows
+      .filter((r) => byId.has(r.id))
+      .map((r) => {
+        const p = byId.get(r.id);
+        const old = p.sample ? null : p.prices?.at(-1)?.p;
+        const ch = old ? ((r.price - old) / old) * 100 : null;
+        const warn = ch != null && Math.abs(ch) > 35;
+        if (warn) big++;
+        return `<tr class="${warn ? 'warn' : ''}"><td>${esc(p.name)}<br><small class="muted">${esc(categoryById(p.category)?.name || p.category)}</small></td><td class="num">${old ? money(old, p.unit) : p.prices?.at(-1) ? `<small class="muted">${money(p.prices.at(-1).p, p.unit)}<br>ukázka</small>` : '—'}</td><td class="num"><strong>${money(r.price, p.unit)}</strong>${ch != null ? `<br><small class="${warn ? 'err' : 'muted'}">${ch > 0 ? '+' : ''}${Math.round(ch)} %</small>` : ''}</td><td>${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.source || 'odkaz')}</a>` : esc(r.source)}${r.shops.length ? `<br><small class="muted">${r.shops.map((x) => esc(`${x.name} ${x.price}`)).join(', ')}</small>` : ''}</td></tr>`;
+      })
+      .join('');
+    mbox.innerHTML = `<p class="small">${mrows.length - unknown.length} cen k uložení${big ? `, <b class="err">${big} se změnilo o víc než 35 % – zkontroluj je</b>` : ''}${unknown.length ? `. Neznámá ID (přeskočí se): ${unknown.map((r) => esc(r.id)).join(', ')}` : ''}.</p>
+      <div class="table-wrap"><table class="cmp"><thead><tr><th>Produkt</th><th class="num">Teď</th><th class="num">Nová cena</th><th>Zdroj</th></tr></thead><tbody>${body}</tbody></table></div>
+      <div class="btns"><button class="btn" data-action="adm-mgo">Uložit ${mrows.length - unknown.length} cen</button></div>`;
+  };
+  pane.querySelector('#mfile').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    try {
+      await mpreview(/\.xlsx?$/i.test(f.name) ? await xlsxToCsv(f) : await f.text());
+    } catch (err) {
+      msg(mmsg, err.message);
+    }
+    e.target.value = '';
+  });
+  actions({
+    'adm-sheet': (b) =>
+      busy(b, async () => {
+        try {
+          downloadFile(`buywise-seznam-produktu-${new Date().toISOString().slice(0, 7)}.csv`, priceSheetCsv(await loadList(), (id) => categoryById(id)?.name || id), 'text/csv;charset=utf-8');
+        } catch (err) {
+          msg(mmsg, err.message);
+        }
+      }),
+    'adm-mprev': (b) => busy(b, () => mpreview(pane.querySelector('#mtext').value).catch((err) => msg(mmsg, err.message))),
+    'adm-mgo': (b) =>
+      busy(b, async () => {
+        try {
+          const r = await adminApi('importPrices', { rows: mrows });
+          mbox.innerHTML = '';
+          msg(mmsg, `Uloženo ${r.updated} cen.${r.unknown?.length ? ` Přeskočeno ${r.unknown.length} neznámých ID.` : ''}`, true);
+          toast(`Měsíční souhrn: uloženo ${r.updated} cen.`, 'ok');
+        } catch (err) {
+          msg(mmsg, err.message);
+        }
+      }),
+  });
+
   let src = 'csv';
   const help = {
     csv: 'Sloupce oddělené středníkem nebo tabulátorem: pořadí; název; podtitul; cena; poptávka; konkurence (Alza=24990|Datart=25490). Soubor z Excelu (.xlsx) se převede sám.',
@@ -495,6 +567,7 @@ async function tabSettings(pane) {
           .map((ta) => [ta.dataset.bg, ta.value.split(/\r?\n/).map((l) => l.split('|').map((x) => x.trim())).filter(([u]) => /^https?:\/\//.test(u || '') || (adminLocal && /^data:image\//.test(u || ''))).map(([url, credit]) => ({ url, credit: credit || '' }))])
           .filter(([, list]) => list.length)
       ),
+      agent: s.agent,
       feeds: feeds ? [...feeds.querySelectorAll('.feed-row')].map((r) => Object.fromEntries([...r.querySelectorAll('[data-f]')].map((i) => [i.dataset.f, i.type === 'checkbox' ? i.checked : i.value.trim()]))).filter((x) => x.url && x.competitor) : [],
     };
     try {
@@ -504,6 +577,130 @@ async function tabSettings(pane) {
     } catch (err) {
       msg(pane.querySelector('#smsg'), err.message);
     }
+  });
+}
+
+// ---------- AI ceny ----------
+// Agent dohledá aktuální ceny na webu (Claude API s vyhledáváním). Každé odvětví je jeden požadavek
+// (30–90 s), proto „Dohledat vše“ běží v prohlížeči postupně a ukazuje průběh.
+const usd = (x) => '$' + (Math.round((x || 0) * 100) / 100).toLocaleString('cs-CZ', { minimumFractionDigits: 2 });
+async function tabAgent(pane) {
+  pane.innerHTML = '<p class="muted">Načítám…</p>';
+  let a;
+  try {
+    a = await adminApi('agentStatus');
+  } catch (e) {
+    pane.innerHTML = `<p class="msg err">${esc(e.message)}</p>`;
+    return;
+  }
+  const cfg = a.settings;
+  const st = a.state;
+  const catLabel = (id) => categoryById(id)?.name || id;
+  const when = (iso) => (iso ? new Date(iso).toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'zatím ne');
+  const free = a.provider !== 'claude';
+  const doneN = (st.monthDone || []).length;
+  pane.innerHTML = `
+    ${a.configured ? '' : `<div class="notice warn"><strong>Bot na ceny zatím není zapnutý – chybí ${esc(a.missing.join(' a '))}.</strong> Nastavení zdarma, asi 5 minut:
+      <ol class="small steps">
+        <li><b>tavily.com</b> → Sign up (bez karty) → zkopíruj API key (začíná <code>tvly-</code>). Zdarma 1 000 hledání měsíčně.</li>
+        <li><b>aistudio.google.com</b> → přihlásit Googlem → Get API key → Create API key. Bezplatný tarif, bez karty.</li>
+        <li>Vercel → projekt → Settings → Environment Variables: <code>TAVILY_API_KEY</code> a <code>GEMINI_API_KEY</code> → Save → Deployments → Redeploy.</li>
+      </ol>
+      <p class="small muted">Místo Gemini jde i Groq (console.groq.com, proměnná <code>GROQ_API_KEY</code>). Placená přesnější varianta: <code>ANTHROPIC_API_KEY</code>.</p></div>`}
+    <div class="card"><h3>Bot na aktuální ceny</h3>
+      <p class="small muted">U odvětví bez oficiálního zdroje (${a.categories.length}: ${a.categories.map(catLabel).join(', ')}) bot vyhledá aktuální české ceny a uloží je i s odkazem na stránku, kde cenu našel. ${free ? 'Cena se uloží, jen když je číslo doslova v textu nalezené stránky.' : 'Cena se uloží, jen když odkaz vede na nalezený výsledek hledání.'} Velká změna proti poslední ceně čeká níže na schválení. Benzín, naftu a LPG dál plní ČSÚ, krypto, akcie, komodity a hry jejich vlastní zdroje.</p>
+      <div class="agent-stats">
+        ${free
+          ? `<div><small>Hledání tento měsíc</small><b>${st.searches || 0}</b><span class="small muted">z limitu ${cfg.searchLimit} (Tavily zdarma 1 000)</span></div>
+             <div><small>${cfg.schedule === 'weekly' ? 'Tento týden hotovo' : 'Tento měsíc hotovo'}</small><b>${doneN} / ${a.categories.length}</b><span class="small muted">odvětví</span></div>`
+          : `<div><small>Útrata tento měsíc (odhad)</small><b>${usd(st.costUsd)}</b><span class="small muted">z rozpočtu ${usd(cfg.budgetUsd)}</span></div>
+             <div><small>Vyhledávání</small><b>${st.searches || 0}</b><span class="small muted">${st.runs || 0} běhů</span></div>`}
+        <div><small>Služba</small><b class="mono">${esc(a.label)}</b><span class="small muted">${a.configured ? 'připojeno' : 'chybí klíč'}</span></div>
+      </div>
+      <form id="agform" class="grid2">
+        <label class="field inline"><input type="checkbox" name="enabled" ${cfg.enabled ? 'checked' : ''}> Hledat ceny automaticky</label>
+        <label class="field">Kdy<select name="schedule"><option value="monthly" ${cfg.schedule === 'monthly' ? 'selected' : ''}>1. den v měsíci – všechna odvětví</option><option value="weekly" ${cfg.schedule === 'weekly' ? 'selected' : ''}>Každý týden (1., 8., 15. a 22. den) – všechna odvětví</option><option value="rotate" ${cfg.schedule === 'rotate' ? 'selected' : ''}>Každý den několik odvětví dokola</option></select><small class="muted">${cfg.schedule === 'rotate' ? '' : `co se nestihne, bot dodělá další ráno · měsíčně asi ${(cfg.schedule === 'weekly' ? 4 : 1) * a.categories.length * 10} hledání`}</small></label>
+        <label class="field" ${cfg.schedule === 'rotate' ? '' : 'style="display:none"'} data-rot>Odvětví za den<input name="perDay" type="number" min="0" max="${a.categories.length}" value="${cfg.perDay}"></label>
+        ${free ? `<label class="field">Max. hledání za měsíc<input name="searchLimit" type="number" min="50" step="10" value="${cfg.searchLimit}"><small class="muted">1 produkt = 1 hledání, jeden běh ≈ ${a.categories.length * 10}</small></label>` : `<label class="field">Měsíční rozpočet ($)<input name="budgetUsd" type="number" min="0" step="1" value="${cfg.budgetUsd}"><small class="muted">po vyčerpání se agent do konce měsíce zastaví</small></label>`}
+        <label class="field">Ke schválení při změně nad (%)<input name="maxJump" type="number" min="5" max="90" value="${cfg.maxJump}"></label>
+        <div class="btns"><button class="btn alt" type="submit">Uložit</button></div>
+      </form><p class="msg" id="agmsg"></p></div>
+    <div class="card"><h3>Dohledat ceny teď</h3>
+      <div class="btns"><button class="btn" data-action="ag-all" ${a.configured ? '' : 'disabled'}>Dohledat všechna odvětví</button>
+        <select id="agcat" aria-label="Odvětví">${a.categories.map((c) => `<option value="${c}">${esc(catLabel(c))}</option>`).join('')}</select>
+        <button class="btn alt" data-action="ag-one" ${a.configured ? '' : 'disabled'}>Dohledat vybrané</button></div>
+      <p class="small muted">${free ? 'Jedno odvětví trvá zhruba 20–60 sekund a spotřebuje asi 10 hledání.' : 'Jedno odvětví trvá zhruba 30–90 sekund a stojí v řádu desítek centů.'} Nech stránku otevřenou, dokud běh neskončí.</p>
+      <div id="agprog"></div></div>
+    <div class="card" id="agreview"></div>
+    <div class="card"><h3>Poslední běhy</h3>${st.log?.length ? `<ul class="adm-list">${st.log.slice(0, 16).map((l) => `<li><span class="nm">${esc(catLabel(l.category))}<small>${when(l.at)}, ${esc(l.who)} – ${l.error ? `<span class="err">${esc(l.error)}</span>` : `${l.updated} cen uloženo, ${l.review} ke schválení, ${l.missing + l.rejected} nenalezeno${free ? `, ${l.searches ?? 0} hledání` : `, ${usd(l.cost)}`}`}</small></span></li>`).join('')}</ul>` : '<p class="small muted">Zatím žádný běh.</p>'}
+      <details class="more"><summary>Kdy bylo které odvětví naposledy</summary><ul class="small">${a.categories.map((c) => `<li>${esc(catLabel(c))}: ${when(st.lastByCategory?.[c])}</li>`).join('')}</ul></details></div>`;
+  pane.querySelector('#agform [name=schedule]').addEventListener('change', (e) => (pane.querySelector('[data-rot]').style.display = e.target.value === 'rotate' ? '' : 'none'));
+
+  const review = pane.querySelector('#agreview');
+  const drawReview = (items) => {
+    review.innerHTML = items.length
+      ? `<h3>Ke schválení (${items.length})</h3><p class="small muted">Cena se změnila víc, než je nastavený limit. Zkontroluj odkaz a schval, nebo zamítni.</p>
+        <div class="table-wrap"><table class="cmp"><thead><tr><th><input type="checkbox" id="agallck" aria-label="Vybrat vše" checked></th><th>Produkt</th><th class="num">Teď</th><th class="num">Nalezeno</th><th>Zdroj</th></tr></thead><tbody>${items
+          .map((x) => `<tr><td><input type="checkbox" data-rid="${esc(x.id)}" checked aria-label="${esc(x.name)}"></td><td>${esc(x.name)}<br><small class="muted">${esc(catLabel(x.category))}</small></td><td class="num">${money(x.old)}</td><td class="num"><strong>${money(x.price)}</strong><br><small class="${x.price > x.old ? 'up' : 'down'}">${x.price > x.old ? '+' : '−'}${x.jump} %</small></td><td><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.sourceName)}</a></td></tr>`)
+          .join('')}</tbody></table></div>
+        <div class="btns"><button class="btn" data-action="ag-rev" data-v="agentApprove">Schválit vybrané</button><button class="btn alt" data-action="ag-rev" data-v="agentReject">Zamítnout vybrané</button></div>`
+      : '<h3>Ke schválení</h3><p class="small muted">Nic nečeká. Sem přijdou ceny, které se změnily víc než o nastavený limit.</p>';
+    review.querySelector('#agallck')?.addEventListener('change', (e) => review.querySelectorAll('[data-rid]').forEach((c) => (c.checked = e.target.checked)));
+  };
+  drawReview(a.review || []);
+
+  const prog = pane.querySelector('#agprog');
+  const runCats = async (cats) => {
+    prog.innerHTML = `<progress max="${cats.length}" value="0"></progress><ul class="adm-list" id="agrows"></ul>`;
+    const rows = prog.querySelector('#agrows');
+    let i = 0;
+    for (const c of cats) {
+      rows.insertAdjacentHTML('beforeend', `<li><span class="nm">${esc(catLabel(c))}<small>Hledám na webu…</small></span></li>`);
+      const sm = rows.lastElementChild.querySelector('small');
+      try {
+        const { result: r } = await adminApi('agentRun', { category: c });
+        sm.innerHTML = `${r.updated} cen uloženo${r.review ? `, ${r.review} ke schválení` : ''}${r.missing + r.rejected ? `, ${r.missing + r.rejected} nenalezeno` : ''} · ${free ? `${r.searches} hledání` : usd(r.cost)}${r.products.length ? `<br>${r.products.slice(0, 12).map((p) => `${esc(p.name)}: <b>${money(p.price)}</b>`).join(' · ')}` : ''}`;
+      } catch (err) {
+        sm.innerHTML = `<span class="err">${esc(err.message)}</span>`;
+        if (/rozpočet|limit hledání|vyčerpaný|_API_KEY|neplatný/.test(err.message)) break;
+      }
+      prog.querySelector('progress').value = ++i;
+    }
+    try {
+      drawReview((await adminApi('agentStatus')).review || []);
+    } catch {}
+    toast('Dohledávání cen dokončeno.', 'ok');
+  };
+
+  pane.querySelector('#agform').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      const { settings } = await adminApi('getSettings');
+      const agent = { ...cfg, enabled: f.enabled.checked, schedule: f.schedule.value, perDay: +f.perDay.value, maxJump: +f.maxJump.value };
+      if (f.searchLimit) agent.searchLimit = +f.searchLimit.value;
+      if (f.budgetUsd) agent.budgetUsd = +f.budgetUsd.value;
+      await adminApi('setSettings', { settings: { ...settings, agent } });
+      msg(pane.querySelector('#agmsg'), 'Uloženo.', true);
+    } catch (err) {
+      msg(pane.querySelector('#agmsg'), err.message);
+    }
+  });
+  actions({
+    'ag-all': (b) => busy(b, () => runCats(a.categories)),
+    'ag-one': (b) => busy(b, () => runCats([pane.querySelector('#agcat').value])),
+    'ag-rev': (b) =>
+      busy(b, async () => {
+        const ids = [...review.querySelectorAll('[data-rid]:checked')].map((c) => c.dataset.rid);
+        if (!ids.length) return;
+        try {
+          const r = await adminApi(b.dataset.v, { ids });
+          toast(b.dataset.v === 'agentApprove' ? `Schváleno ${r.applied} cen.` : 'Zamítnuto.', 'ok');
+          drawReview((await adminApi('agentStatus')).review || []);
+        } catch (err) {
+          toast(esc(err.message), 'err');
+        }
+      }),
   });
 }
 

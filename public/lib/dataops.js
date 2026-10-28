@@ -58,6 +58,8 @@ export function merge(prev, input) {
     prices: addPoint(prev?.prices || [], parseNum(input.price)),
     competitors,
     sample: false,
+    // Ruční cena přepíše i údaj o zdroji (např. „Dohledáno na webu (AI)“).
+    ...(parseNum(input.price) != null ? { source: input.source || '', sourceUrl: '' } : {}),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -340,7 +342,8 @@ const FUELS = [
 function csvRows(text) {
   const lines = String(text).replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim());
   if (!lines.length) return [];
-  const sep = (lines[0].match(/;/g) || []).length > (lines[0].match(/,/g) || []).length ? ';' : ',';
+  const cnt = (ch) => lines[0].split(ch).length;
+  const sep = cnt('\t') > 1 && cnt('\t') >= cnt(';') ? '\t' : cnt(';') >= cnt(',') ? ';' : ',';
   const split = (line) => {
     const out = [];
     let cur = '', q = false;
@@ -447,4 +450,97 @@ export function searchOffers(index, query, { limit = 20 } = {}) {
   });
   out.sort((a, b) => b.score - a.score || a.minPrice - b.minPrice);
   return { groups: out.slice(0, limit).map(({ score, ...g }) => g), total: out.length };
+}
+
+// ---------- Měsíční souhrn cen (všechna odvětví najednou) ----------
+// Šablona: administrace stáhne seznam produktů, Claude doplní sloupce cena/zdroj/odkaz/datum/prodejci,
+// soubor se nahraje zpět. Mění se jen ceny – pořadí v žebříčcích zůstává.
+export const PRICE_SHEET_COLUMNS = ['id', 'odvětví', 'produkt', 'podtitul', 'jednotka', 'poslední cena', 'cena', 'zdroj', 'odkaz', 'datum', 'prodejci'];
+const csvCell = (v) => {
+  const s = String(v ?? '');
+  return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+export function priceSheetCsv(products, catName = (id) => id) {
+  const lines = products
+    .filter((p) => p.active !== false)
+    .sort((a, b) => a.category.localeCompare(b.category) || (a.rank ?? 99) - (b.rank ?? 99))
+    .map((p) => {
+      const l = (p.prices || []).filter((x) => x && x.p != null).at(-1);
+      return [p.id, catName(p.category), p.name, p.subtitle || '', p.unit || 'Kč', l ? `${String(l.p).replace('.', ',')}${p.sample ? ' (ukázka)' : ` (${l.d})`}` : '', '', '', '', '', ''].map(csvCell).join(';');
+    });
+  return '﻿' + [PRICE_SHEET_COLUMNS.join(';'), ...lines].join('\r\n') + '\r\n';
+}
+
+const normKey = (k) => String(k).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z]/g, '');
+const httpUrl = (u) => (/^https?:\/\/[^\s"<>]+$/i.test(String(u || '').trim()) ? String(u).trim().slice(0, 600) : '');
+const isoDate = (v) => {
+  const s = String(v || '').trim();
+  let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (m) return s;
+  m = /^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})$/.exec(s);
+  return m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : '';
+};
+// Prodejci: „Alza=32490|Datart=32990“, volitelně s odkazem „Alza=32490=https://…“.
+export function parseShops(text) {
+  return String(text || '')
+    .split('|')
+    .map((x) => {
+      const [name, price, ...url] = x.split('=');
+      return { name: String(name || '').trim().slice(0, 60), price: parseNum(price), url: httpUrl(url.join('=')) };
+    })
+    .filter((x) => x.name && x.price > 0)
+    .slice(0, 8);
+}
+export function parsePriceSheet(text) {
+  const rows = csvRows(text);
+  const out = [];
+  for (const r of rows) {
+    const g = {};
+    for (const [k, v] of Object.entries(r)) g[normKey(k)] = v;
+    const id = String(g.id || '').trim();
+    const price = parseNum(g.cena ?? g.price);
+    if (!id || !(price > 0)) continue;
+    out.push({ id, name: g.produkt || '', price, source: String(g.zdroj || '').trim().slice(0, 80), url: httpUrl(g.odkaz || g.url), date: isoDate(g.datum), shops: parseShops(g.prodejci) });
+  }
+  return out;
+}
+
+// Zapíše nalezenou cenu (souhrn nebo AI agent): bod historie, prodejci, zdroj s odkazem.
+// U ukázkového produktu zahodí vymyšlenou historii i prodejce – od teď jen skutečné ceny.
+const dateCz = (d) => d.split('-').reverse().map((x, i) => (i < 2 ? String(+x) : x)).join('. ');
+export function applyFoundPrice(p, { price, shops = [], label, sourceName = '', url = '', date = '' }) {
+  const fake = !!p.sample;
+  const competitors = fake ? [] : (p.competitors || []).map((c) => ({ ...c }));
+  for (const s of shops) {
+    const i = competitors.findIndex((c) => c.name.toLowerCase() === s.name.toLowerCase());
+    const old = i >= 0 ? competitors[i] : { name: s.name, url: '', prices: [] };
+    const next = { ...old, url: s.url || old.url, prices: addPoint(old.prices || [], s.price) };
+    if (i >= 0) competitors[i] = next;
+    else competitors.push(next);
+  }
+  return {
+    ...p,
+    prices: addPoint(fake ? [] : p.prices || [], price),
+    competitors,
+    sample: false,
+    source: `${label}${sourceName ? `: ${sourceName}` : ''}, ${dateCz(date || todayIso())}`,
+    sourceUrl: url || '',
+    updatedAt: new Date().toISOString(),
+  };
+}
+export function applyPriceSheet(products, rows) {
+  const byId = new Map(products.map((p) => [p.id, p]));
+  const updated = [];
+  const unknown = [];
+  const seen = new Set();
+  for (const r of rows) {
+    const p = byId.get(r.id);
+    if (!p || seen.has(r.id)) {
+      if (!p) unknown.push(r.id);
+      continue;
+    }
+    seen.add(r.id);
+    updated.push(applyFoundPrice(p, { price: r.price, shops: r.shops || [], label: 'Měsíční souhrn cen', sourceName: r.source, url: r.url, date: r.date }));
+  }
+  return { updated, unknown };
 }

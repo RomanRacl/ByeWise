@@ -674,4 +674,7 @@ export const EN = {
   'Žebříčky podle odvětví': 'Rankings by sector',
   'Živá data aktualizována {d}.': 'Live data updated {d}.',
   'Žádné hlídače.': 'No alerts.',
+  'stránka se zdrojem ceny': 'page with the price source',
+  'Pohonné hmoty (ČSÚ)': 'Fuel (Czech Statistical Office)',
+  'Ceny dohledané na webu (AI)': 'Prices found on the web (AI)',
 };

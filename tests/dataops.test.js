@@ -77,3 +77,41 @@ test('affiliate odkazy', () => {
   assert.equal(affiliate('https://datart.cz/y', rules), 'https://go.example/?u=https%3A%2F%2Fdatart.cz%2Fy');
   assert.equal(affiliate('https://kosmas.cz/z', rules), 'https://kosmas.cz/z');
 });
+
+test('měsíční souhrn cen: šablona → vyplnění → import', async () => {
+  const { priceSheetCsv, parsePriceSheet, applyPriceSheet } = await import('../public/lib/dataops.js');
+  const products = [
+    { id: 'mobily-a', category: 'mobily', name: 'Telefon; "A"', subtitle: '128 GB', unit: 'Kč', rank: 2, sample: true, prices: [{ d: '2026-01-01', p: 100 }], competitors: [{ name: 'Fake', prices: [] }] },
+    { id: 'mobily-b', category: 'mobily', name: 'B', unit: 'Kč', rank: 1, prices: [{ d: '2026-10-01', p: 1000 }], competitors: [{ name: 'Alza', url: 'https://alza.cz/b', prices: [{ d: '2026-10-01', p: 1000 }] }] },
+    { id: 'old', category: 'mobily', name: 'Vypadlý', active: false, prices: [] },
+  ];
+  const csv = priceSheetCsv(products, () => 'Mobily');
+  const lines = csv.replace(/^﻿/, '').trim().split('\r\n');
+  assert.equal(lines.length, 3, 'jen aktivní produkty');
+  assert.ok(lines[1].startsWith('mobily-b;'), 'řazení podle pořadí');
+  assert.ok(lines[2].includes('"Telefon; ""A"""'), 'escapování');
+  assert.ok(lines[2].includes('100 (ukázka)'));
+  // Claude vyplní (vynechá sloupce navíc, jiný oddělovač čísel, datum česky)
+  const filled = [
+    'id;odvětví;produkt;podtitul;jednotka;poslední cena;cena;zdroj;odkaz;datum;prodejci',
+    'mobily-b;Mobily;B;;Kč;1000;1 049,90 Kč;Alza.cz;https://www.alza.cz/b;2. 11. 2026;Alza=1049,9=https://www.alza.cz/b|Datart=1099',
+    'mobily-a;Mobily;"Telefon; ""A""";128 GB;Kč;100;250;Datart;javascript:alert(1);;',
+    'neexistuje;;;;;;10;x;;;',
+    'mobily-x;;;;;;;;;;',
+  ].join('\n');
+  const rows = parsePriceSheet(filled);
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows[0], { id: 'mobily-b', name: 'B', price: 1049.9, source: 'Alza.cz', url: 'https://www.alza.cz/b', date: '2026-11-02', shops: [{ name: 'Alza', price: 1049.9, url: 'https://www.alza.cz/b' }, { name: 'Datart', price: 1099, url: '' }] });
+  assert.equal(rows[1].url, '', 'jen http(s) odkazy');
+  const { updated, unknown } = applyPriceSheet(products, rows);
+  assert.deepEqual(unknown, ['neexistuje']);
+  const b = updated.find((p) => p.id === 'mobily-b');
+  assert.equal(b.rank, 1, 'pořadí beze změny');
+  assert.equal(b.prices.length, 2);
+  assert.equal(b.source, 'Měsíční souhrn cen: Alza.cz, 2. 11. 2026');
+  assert.deepEqual(b.competitors.map((c) => [c.name, c.prices.at(-1).p]), [['Alza', 1049.9], ['Datart', 1099]]);
+  const a = updated.find((p) => p.id === 'mobily-a');
+  assert.equal(a.sample, false);
+  assert.deepEqual(a.prices.map((x) => x.p), [250], 'ukázková historie pryč');
+  assert.equal(a.competitors.length, 0);
+});

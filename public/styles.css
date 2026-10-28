@@ -1004,3 +1004,15 @@ html[data-vt='back']::view-transition-new(root) { animation-name: vt-in-back; }
 .offers .diff { font-size: 12.5px; color: var(--up); text-align: right; }
 .btn.sm { padding: 5px 10px; font-size: 13px; border-radius: 8px; }
 .ext-search h3 { font-size: 16px; }
+
+/* AI cenový agent (administrace) */
+.agent-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 14px 0 18px; }
+.agent-stats > div { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: 12px; background: var(--surface-2, rgba(127,127,127,.08)); }
+.agent-stats b { font-size: 1.35rem; }
+.agent-stats b.mono { font-size: .95rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+#agprog progress { width: 100%; height: 8px; margin: 12px 0 4px; accent-color: var(--accent, #2563eb); }
+#agprog .err, .adm-list .err { color: var(--down, #c0392b); }
+#agcat { min-width: 160px; }
+#monthly .steps { margin: 6px 0 12px; padding-left: 20px; line-height: 1.6; }
+#mpreview tr.warn td { background: color-mix(in srgb, var(--down, #c0392b) 8%, transparent); }
+#mpreview .err, #mmsg.err { color: var(--down, #c0392b); }

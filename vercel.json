@@ -4,6 +4,22 @@
     {
       "path": "/api/cron",
       "schedule": "40 14 * * *"
+    },
+    {
+      "path": "/api/agent",
+      "schedule": "15 4 * * *"
+    },
+    {
+      "path": "/api/agent",
+      "schedule": "15 5 1,8,15,22 * *"
+    },
+    {
+      "path": "/api/agent",
+      "schedule": "15 6 1,8,15,22 * *"
+    },
+    {
+      "path": "/api/agent",
+      "schedule": "15 7 1,8,15,22 * *"
     }
   ],
   "functions": {
@@ -11,7 +27,7 @@
       "maxDuration": 60
     },
     "api/admin.js": {
-      "maxDuration": 60
+      "maxDuration": 300
     },
     "api/data.js": {
       "maxDuration": 20
@@ -30,6 +46,9 @@
     },
     "api/search.js": {
       "maxDuration": 15
+    },
+    "api/agent.js": {
+      "maxDuration": 300
     }
   },
   "rewrites": [

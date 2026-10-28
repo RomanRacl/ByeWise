@@ -3,7 +3,7 @@ import { accordion, skeleton } from '../ui.js';
 import { backtest } from '../../lib/analytics.js';
 import { t, locale } from '../i18n.js';
 
-const SOURCE_NAMES = { cnb: 'Kurzy ČNB', komodity: 'Komodity (Yahoo Finance)', akcie: 'Akcie (Yahoo Finance)', krypto: 'Kryptoměny (CoinGecko)', hry: 'PC hry (Steam)', feedy: 'Feedy e-shopů' };
+const SOURCE_NAMES = { cnb: 'Kurzy ČNB', komodity: 'Komodity (Yahoo Finance)', akcie: 'Akcie (Yahoo Finance)', krypto: 'Kryptoměny (CoinGecko)', hry: 'PC hry (Steam)', feedy: 'Feedy e-shopů', pohonne: 'Pohonné hmoty (ČSÚ)', ai: 'Ceny dohledané na webu (AI)' };
 
 export async function renderStatus(main) {
   document.title = `${t('Stav dat')} – BuyWise`;

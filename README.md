@@ -125,6 +125,7 @@ Automatická aktualizace pak běží **každý den v 15:40** (Vercel Cron). Poš
 | Návštěvnost | Vercel → projekt → **Analytics → Enable** (skript se načítá sám). |
 | Affiliate odkazy | Administrace → Nastavení: `alza.cz \| {url}?idp=TVOJE_ID` (programy mají Alza, Heureka, Datart, CK…). |
 | Ceny z e-shopů | Viz kapitola **Feedy e-shopů** níže. |
+| Bot na aktuální ceny (zdarma) | `TAVILY_API_KEY` + `GEMINI_API_KEY`. Viz kapitola **Bot na aktuální ceny** níže. |
 
 ## Jak se data plní
 
@@ -137,13 +138,49 @@ Automatická aktualizace pak běží **každý den v 15:40** (Vercel Cron). Poš
 | Auta | Tisková zpráva SDA → Import → „Tisková zpráva SDA“ | měsíčně |
 | Knihy | Žebříček SČKN/knihkupectví → Import → „Textový žebříček“ | měsíčně |
 | Pohonné hmoty: Natural 95, nafta, LPG | ČSÚ – otevřená data, týdenní průměr za celou ČR (včetně historie) | týdně automaticky |
-| Elektro, mobily, sport, kosmetika, potraviny, energie… | Feedy e-shopů, CSV/Excel nebo ručně | podle feedů denně |
-| Nábytek, pojištění | CSV/Excel nebo hromadná úprava (pojištění = průměrné roční pojistné) | měsíčně |
-| Dovolené, tarify, vstupenky, nemovitosti, ojeté vozy, pohonné hmoty | CSV/Excel nebo hromadná úprava | týdně až měsíčně |
+| Všechna ostatní odvětví (auta, ojeté vozy, knihy, elektro, mobily, sport, kosmetika, tarify, vstupenky, dovolené, potraviny, ostatní paliva, energie, nemovitosti, nábytek, pojištění) | **Bot na ceny** (Tavily + Gemini, zdarma) nebo měsíční souhrn přes Clauda | automaticky 1. den v měsíci |
+| Elektro, mobily, sport, kosmetika | navíc feedy e-shopů (přesnější, ceny všech prodejců) | podle feedů denně |
+| Pořadí v žebříčcích (auta, knihy, …) | Import SDA / žebříčku, CSV/Excel nebo ručně | měsíčně |
 
-**Jak aktuální jsou ceny:** automaticky aktuální jsou jen odvětví v tabulce označená „automaticky“ – a to až po připojení Firebase a první aktualizaci (Administrace → Data a zálohy → Aktualizovat živá data). Ostatní výchozí ceny jsou **orientační** a mají štítek „ukázka“, dokud je nepřepíšeš nebo je nezačne plnit feed. Bez Firebase (ukázkový režim) je celá historie cen vygenerovaná.
+**Jak aktuální jsou ceny:** všechno se plní samo až po připojení Firebase. Hry, investice a Natural 95/nafta/LPG po první aktualizaci (Administrace → Data a zálohy → Aktualizovat živá data), ostatní odvětví po prvním běhu bota (Administrace → Bot na ceny → Dohledat všechna odvětví) nebo po nahrání měsíčního souhrnu. Dokud cenu nic nepřepíše, je **orientační** a má štítek „ukázka“. Bez Firebase (ukázkový režim) je celá historie cen vygenerovaná.
 
 **Každé uložení ceny přidá dnešní záznam do historie.** Odhad potřebuje aspoň 6 záznamů za aspoň 10 dní, sezónnost aspoň rok.
+
+## Měsíční souhrn cen (zdarma)
+
+Nejjednodušší cesta, jak mít aktuální ceny ve všech odvětvích bez placených služeb:
+
+1. Na začátku měsíce: **Administrace → Import → Stáhnout seznam produktů** (CSV se všemi produkty, jejich ID a poslední cenou).
+2. Pošli soubor Claudovi a napiš „udělej mi souhrn cen“. Claude dohledá aktuální české ceny a vrátí stejný soubor s vyplněnými sloupci `cena`, `zdroj`, `odkaz`, `datum` a `prodejci` (`Alza=32490|Datart=32990`).
+3. **Import → Nahrát souhrn cen**, zkontroluj náhled (změny nad 35 % jsou zvýrazněné) a **Uložit**.
+
+Mění se jen ceny, pořadí v žebříčcích zůstává. Na detailu produktu je pak „Zdroj: Měsíční souhrn cen: web, datum“ s odkazem. Funguje i v samostatné HTML verzi. Hry, investice a paliva z ČSÚ se plní samy, v souhrnu je můžeš nechat prázdné.
+
+## Bot na aktuální ceny (zdarma, měsíčně nebo týdně)
+
+Pro odvětví bez oficiálního zdroje (auta, mobily, elektro, sport, kosmetika, tarify, dovolené, potraviny, energie, nemovitosti, pojištění…) BuyWise jednou měsíčně sám vyhledá aktuální české ceny a uloží je i s odkazem na zdroj.
+
+**Jak funguje:** pro každý produkt jedno vyhledání přes **Tavily** (1 000 hledání měsíčně zdarma, bez karty), bezplatné AI (**Gemini** od Googlu, nebo **Groq**) z nalezených úryvků vytáhne cenu. Celý měsíc je asi 160 hledání.
+
+**Zapnutí (asi 5 minut, zdarma):**
+1. https://tavily.com → Sign up → zkopíruj API key (`tvly-…`).
+2. https://aistudio.google.com → přihlásit Googlem → **Get API key → Create API key**.
+3. Vercel → projekt → Settings → Environment Variables: `TAVILY_API_KEY` a `GEMINI_API_KEY` → Save → Deployments → **Redeploy**.
+4. Administrace → **Bot na ceny** → „Dohledat všechna odvětví“ (první naplnění hned, jinak počká na 1. den v měsíci).
+
+**Kdy běží:** 1. den v měsíci ráno (mezi 5. a 9. hodinou čtyři běhy po 5 minutách – víc Vercel Hobby na jeden běh nedovolí). Co nestihne nebo co selže, dodělá další ráno, nejpozději do 7. dne. Pak až další 1. den. V záložce Bot na ceny jde přepnout na **každý týden** (1., 8., 15. a 22. den): jeden běh je asi 157 hledání, týdně tedy asi 630 za měsíc – pořád v bezplatných 1 000 (limit v nastavení je 900 jako rezerva pro opakované pokusy). Nebo „každý den několik odvětví dokola“.
+
+**Pojistky proti nesmyslům:**
+- Cena se uloží, jen když je odkaz mezi výsledky hledání **a číslo ceny doslova stojí v textu nalezené stránky** (AI si tedy nemůže cenu vymyslet).
+- Ceny prodejců platí jen se stejnou kontrolou a v rozmezí 50–200 % hlavní ceny.
+- Změna nad 35 % (u ukázkových cen 60 %) čeká na schválení v záložce Bot na ceny.
+- Na detailu produktu je „Zdroj: Dohledáno na webu (AI): web, datum“ s odkazem.
+- Ruční cena i měsíční souhrn mají vždy přednost; ČSÚ paliva, hry a investice bot nepřepisuje.
+- Limit hledání za měsíc (výchozí 900) hlídá, aby se nepřekročil bezplatný tarif Tavily.
+
+**Alternativy:** místo Gemini lze `GROQ_API_KEY` (console.groq.com, model `GROQ_MODEL`, výchozí `openai/gpt-oss-120b`). Jiný model Gemini: `GEMINI_MODEL` (výchozí `gemini-3.5-flash-lite`). Přesnější placená varianta, která čte celé stránky: `ANTHROPIC_API_KEY` (Claude, orientačně 0,10–0,30 $ za odvětví; při nastavení obou variant se použije bezplatná, pokud není `AGENT_PROVIDER=claude`).
+
+**Upozornění:** bezplatné tarify se můžou změnit. Gemini v bezplatném tarifu používá dotazy ke zlepšování služeb Googlu (posílají se jen názvy produktů a úryvky z webu). Kdyby bot přestal fungovat, ceny dál doplníš měsíčním souhrnem.
 
 ## Feedy e-shopů (mobily, sport, kosmetika, elektro)
 
@@ -232,7 +269,7 @@ Jde o statistické odhady, ne o investiční poradenství.
 - **Google Trends** – Google nemá veřejné API.
 - **Historická data z Hlídače cen** – bez veřejného API.
 - **Heureka API** – jen pro smluvní partnery; náhradou jsou XML feedy e-shopů.
-- **Automatické stahování z webů Invie, Alzy apod.** – porušuje jejich podmínky a weby ho blokují.
+- **Přímé stahování (scraping) webů Alzy apod.** – porušuje jejich podmínky a weby ho blokují. Místo toho ceny dohledává bot přes vyhledávací API a feedy e-shopů.
 - **Placená prémiová verze** – potřebuje platební bránu (např. Stripe) a obchodní rozhodnutí; dá se doplnit později.
 
 ## Struktura projektu
@@ -251,6 +288,8 @@ api/data.js         data pro web (lehká verze, detail, konfigurace, stav)
 api/admin.js        administrace
 api/user.js         účet, oblíbené, portfolio, hlídače, push
 api/cron.js         denní aktualizace (Vercel Cron)
+api/agent.js        plánovaný běh bota na ceny (Vercel Cron)
+api/_agent.js       bot na ceny: Tavily + Gemini/Groq (zdarma) nebo Claude, kontrola a zápis cen
 api/v1.js           veřejné API
 api/page.js         SEO náhledy stránek produktů a odvětví
 api/sitemap.js      sitemap.xml a robots.txt

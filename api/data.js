@@ -81,7 +81,12 @@ export default async function handler(req, res) {
     if (q.view === 'status') {
       res.setHeader('Cache-Control', 's-maxage=60');
       if (!db) return res.status(200).json({ mode: 'demo', meta: null });
-      const [meta, products, pending] = await Promise.all([getMeta(), loadAll({ includeInactive: true }), getDoc('meta/pending')]);
+      const [meta, products, pending, agent] = await Promise.all([getMeta(), loadAll({ includeInactive: true }), getDoc('meta/pending'), getDoc('meta/agent')]);
+      const lastAi = agent?.log?.[0];
+      if (meta && lastAi) {
+        const n = Object.keys(agent.lastByCategory || {}).length;
+        meta.sources = { ...(meta.sources || {}), ai: { ok: !lastAi.error, at: lastAi.at, msg: lastAi.error ? lastAi.error : `naposledy ${lastAi.category}: ${lastAi.updated} cen; obnoveno ${n} odvětví` } };
+      }
       const counts = {};
       for (const p of products) if (p.active !== false) counts[p.category] = (counts[p.category] || 0) + 1;
       const stale = products.filter((p) => p.active !== false && p.updatedAt && Date.now() - Date.parse(p.updatedAt) > 45 * 86400000).length;
