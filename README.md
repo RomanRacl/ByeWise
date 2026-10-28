@@ -125,7 +125,7 @@ Automatická aktualizace pak běží **každý den v 15:40** (Vercel Cron). Poš
 | Návštěvnost | Vercel → projekt → **Analytics → Enable** (skript se načítá sám). |
 | Affiliate odkazy | Administrace → Nastavení: `alza.cz \| {url}?idp=TVOJE_ID` (programy mají Alza, Heureka, Datart, CK…). |
 | Ceny z e-shopů | Viz kapitola **Feedy e-shopů** níže. |
-| Bot na aktuální ceny (zdarma) | `TAVILY_API_KEY` + `GEMINI_API_KEY`. Viz kapitola **Bot na aktuální ceny** níže. |
+| Bot na aktuální ceny (zdarma) | `TAVILY_API_KEY` + `OPENROUTER_API_KEY`. Viz kapitola **Bot na aktuální ceny** níže. |
 
 ## Jak se data plní
 
@@ -138,7 +138,7 @@ Automatická aktualizace pak běží **každý den v 15:40** (Vercel Cron). Poš
 | Auta | Tisková zpráva SDA → Import → „Tisková zpráva SDA“ | měsíčně |
 | Knihy | Žebříček SČKN/knihkupectví → Import → „Textový žebříček“ | měsíčně |
 | Pohonné hmoty: Natural 95, nafta, LPG | ČSÚ – otevřená data, týdenní průměr za celou ČR (včetně historie) | týdně automaticky |
-| Všechna ostatní odvětví (auta, ojeté vozy, knihy, elektro, mobily, sport, kosmetika, tarify, vstupenky, dovolené, potraviny, ostatní paliva, energie, nemovitosti, nábytek, pojištění) | **Bot na ceny** (Tavily + Gemini, zdarma) nebo měsíční souhrn přes Clauda | automaticky 1. den v měsíci |
+| Všechna ostatní odvětví (auta, ojeté vozy, knihy, elektro, mobily, sport, kosmetika, tarify, vstupenky, dovolené, potraviny, ostatní paliva, energie, nemovitosti, nábytek, pojištění) | **Bot na ceny** (Tavily + OpenRouter, zdarma) nebo měsíční souhrn přes Clauda | automaticky 1. den v měsíci |
 | Elektro, mobily, sport, kosmetika | navíc feedy e-shopů (přesnější, ceny všech prodejců) | podle feedů denně |
 | Pořadí v žebříčcích (auta, knihy, …) | Import SDA / žebříčku, CSV/Excel nebo ručně | měsíčně |
 
@@ -160,12 +160,12 @@ Mění se jen ceny, pořadí v žebříčcích zůstává. Na detailu produktu j
 
 Pro odvětví bez oficiálního zdroje (auta, mobily, elektro, sport, kosmetika, tarify, dovolené, potraviny, energie, nemovitosti, pojištění…) BuyWise jednou měsíčně sám vyhledá aktuální české ceny a uloží je i s odkazem na zdroj.
 
-**Jak funguje:** pro každý produkt jedno vyhledání přes **Tavily** (1 000 hledání měsíčně zdarma, bez karty), bezplatné AI (**Gemini** od Googlu, nebo **Groq**) z nalezených úryvků vytáhne cenu. Celý měsíc je asi 160 hledání.
+**Jak funguje:** pro každý produkt jedno vyhledání přes **Tavily** (1 000 hledání měsíčně zdarma, bez karty), bezplatné AI (**OpenRouter** s modelem zdarma, nebo **Gemini** / **Groq**) z nalezených úryvků vytáhne cenu. Celý měsíc je asi 160 hledání.
 
 **Zapnutí (asi 5 minut, zdarma):**
 1. https://tavily.com → Sign up → zkopíruj API key (`tvly-…`).
-2. https://aistudio.google.com → přihlásit Googlem → **Get API key → Create API key**.
-3. Vercel → projekt → Settings → Environment Variables: `TAVILY_API_KEY` a `GEMINI_API_KEY` → Save → Deployments → **Redeploy**.
+2. https://openrouter.ai → **Keys → Create key** (bezplatné modely s příponou `:free`, bez karty; limit 50 požadavků denně, bot potřebuje asi 16 na běh).
+3. Vercel → projekt → Settings → Environment Variables: `TAVILY_API_KEY` a `OPENROUTER_API_KEY` → Save → Deployments → **Redeploy**.
 4. Administrace → **Bot na ceny** → „Dohledat všechna odvětví“ (první naplnění hned, jinak počká na 1. den v měsíci).
 
 **Kdy běží:** 1. den v měsíci ráno (mezi 5. a 9. hodinou čtyři běhy po 5 minutách – víc Vercel Hobby na jeden běh nedovolí). Co nestihne nebo co selže, dodělá další ráno, nejpozději do 7. dne. Pak až další 1. den. V záložce Bot na ceny jde přepnout na **každý týden** (1., 8., 15. a 22. den): jeden běh je asi 157 hledání, týdně tedy asi 630 za měsíc – pořád v bezplatných 1 000 (limit v nastavení je 900 jako rezerva pro opakované pokusy). Nebo „každý den několik odvětví dokola“.
@@ -178,7 +178,7 @@ Pro odvětví bez oficiálního zdroje (auta, mobily, elektro, sport, kosmetika,
 - Ruční cena i měsíční souhrn mají vždy přednost; ČSÚ paliva, hry a investice bot nepřepisuje.
 - Limit hledání za měsíc (výchozí 900) hlídá, aby se nepřekročil bezplatný tarif Tavily.
 
-**Alternativy:** místo Gemini lze `GROQ_API_KEY` (console.groq.com, model `GROQ_MODEL`, výchozí `openai/gpt-oss-120b`). Jiný model Gemini: `GEMINI_MODEL` (výchozí `gemini-3.5-flash-lite`). Přesnější placená varianta, která čte celé stránky: `ANTHROPIC_API_KEY` (Claude, orientačně 0,10–0,30 $ za odvětví; při nastavení obou variant se použije bezplatná, pokud není `AGENT_PROVIDER=claude`).
+**Alternativy:** OpenRouter zkouší postupně modely z `OPENROUTER_MODEL` (čárkami, výchozí `google/gemma-4-31b-it:free,nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-26b-a4b-it:free`) – bezplatné modely se mění, aktuální najdeš na openrouter.ai/models (filtr Free). Místo OpenRouteru lze `GEMINI_API_KEY` (aistudio.google.com) nebo `GROQ_API_KEY` (console.groq.com, model `GROQ_MODEL`, výchozí `openai/gpt-oss-120b`). Jiný model Gemini: `GEMINI_MODEL` (výchozí `gemini-3.5-flash-lite`). Přesnější placená varianta, která čte celé stránky: `ANTHROPIC_API_KEY` (Claude, orientačně 0,10–0,30 $ za odvětví; při nastavení obou variant se použije bezplatná, pokud není `AGENT_PROVIDER=claude`).
 
 **Upozornění:** bezplatné tarify se můžou změnit. Gemini v bezplatném tarifu používá dotazy ke zlepšování služeb Googlu (posílají se jen názvy produktů a úryvky z webu). Kdyby bot přestal fungovat, ceny dál doplníš měsíčním souhrnem.
 

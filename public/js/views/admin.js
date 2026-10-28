@@ -603,10 +603,10 @@ async function tabAgent(pane) {
     ${a.configured ? '' : `<div class="notice warn"><strong>Bot na ceny zatím není zapnutý – chybí ${esc(a.missing.join(' a '))}.</strong> Nastavení zdarma, asi 5 minut:
       <ol class="small steps">
         <li><b>tavily.com</b> → Sign up (bez karty) → zkopíruj API key (začíná <code>tvly-</code>). Zdarma 1 000 hledání měsíčně.</li>
-        <li><b>aistudio.google.com</b> → přihlásit Googlem → Get API key → Create API key. Bezplatný tarif, bez karty.</li>
-        <li>Vercel → projekt → Settings → Environment Variables: <code>TAVILY_API_KEY</code> a <code>GEMINI_API_KEY</code> → Save → Deployments → Redeploy.</li>
+        <li><b>openrouter.ai</b> → Keys → Create key (bezplatné modely, bez karty).</li>
+        <li>Vercel → projekt → Settings → Environment Variables: <code>TAVILY_API_KEY</code> a <code>OPENROUTER_API_KEY</code> (názvy přesně takhle) → Save → Deployments → Redeploy.</li>
       </ol>
-      <p class="small muted">Místo Gemini jde i Groq (console.groq.com, proměnná <code>GROQ_API_KEY</code>). Placená přesnější varianta: <code>ANTHROPIC_API_KEY</code>.</p></div>`}
+      <p class="small muted">Místo OpenRouteru jde i Gemini (<code>GEMINI_API_KEY</code>) nebo Groq (<code>GROQ_API_KEY</code>). Placená přesnější varianta: <code>ANTHROPIC_API_KEY</code>.</p></div>`}
     <div class="card"><h3>Bot na aktuální ceny</h3>
       <p class="small muted">U odvětví bez oficiálního zdroje (${a.categories.length}: ${a.categories.map(catLabel).join(', ')}) bot vyhledá aktuální české ceny a uloží je i s odkazem na stránku, kde cenu našel. ${free ? 'Cena se uloží, jen když je číslo doslova v textu nalezené stránky.' : 'Cena se uloží, jen když odkaz vede na nalezený výsledek hledání.'} Velká změna proti poslední ceně čeká níže na schválení. Benzín, naftu a LPG dál plní ČSÚ, krypto, akcie, komodity a hry jejich vlastní zdroje.</p>
       <div class="agent-stats">

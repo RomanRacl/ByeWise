@@ -324,3 +324,27 @@ test('bot: týdenní plán (1., 8., 15., 22. den) a období', async () => {
   assert.ok(n * 4 <= 900, `${n} produktů × 4 = ${n * 4}`);
   console.log('hledání za běh:', n, '| za měsíc týdně:', n * 4);
 });
+
+test('bot: OpenRouter jako bezplatné AI', async () => {
+  const saved = { g: process.env.GEMINI_API_KEY };
+  delete process.env.GEMINI_API_KEY;
+  process.env.TAVILY_API_KEY = 'tvly-test';
+  process.env.OPENROUTER_API_KEY = 'sk-or-test';
+  assert.equal(A.provider(), 'free');
+  assert.match(A.providerLabel(), /Tavily \+ OpenRouter \(google\/gemma-4-31b-it:free\)/);
+  let body;
+  const fetchImpl = async (url, opts) => {
+    assert.equal(url, 'https://openrouter.ai/api/v1/chat/completions');
+    assert.equal(opts.headers.authorization, 'Bearer sk-or-test');
+    body = JSON.parse(opts.body);
+    return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'Tady:\n```json\n{"prices":[{"id":"a","price":5}]}\n```' } }] }), headers: { get: () => null } };
+  };
+  const out = await A.callFreeLLM('test', { fetchImpl });
+  assert.equal(body.models.length, 3, 'záložní bezplatné modely');
+  assert.ok(body.models.every((m) => m.endsWith(':free')));
+  assert.deepEqual(A.parseFreeAnswer(out), [{ id: 'a', price: 5 }]);
+  const err = await A.callFreeLLM('x', { fetchImpl: async () => ({ ok: false, status: 402, json: async () => ({ error: { message: 'Insufficient credits' } }), headers: { get: () => null } }) }).catch((e) => e);
+  assert.match(err.message, /OpenRouter: účet má záporný zůstatek/);
+  delete process.env.OPENROUTER_API_KEY;
+  process.env.GEMINI_API_KEY = saved.g;
+});

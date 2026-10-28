@@ -37,7 +37,8 @@ export function agentSettings(settings = {}) {
 }
 
 // Která varianta je nastavená: free = TAVILY_API_KEY + (GEMINI_API_KEY nebo GROQ_API_KEY), claude = ANTHROPIC_API_KEY.
-const freeReady = () => !!process.env.TAVILY_API_KEY && !!(process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY);
+const orKey = () => process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_KEY || '';
+const freeReady = () => !!process.env.TAVILY_API_KEY && !!(process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY || orKey());
 export function provider() {
   const want = String(process.env.AGENT_PROVIDER || '').toLowerCase();
   if (want === 'claude' && process.env.ANTHROPIC_API_KEY) return 'claude';
@@ -48,17 +49,22 @@ export function provider() {
 export const agentConfigured = () => !!provider();
 export const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 export const GROQ_MODEL = () => process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
+// OpenRouter: bezplatné modely (přípona :free) se často mění – posílá se seznam a OpenRouter vezme první dostupný.
+export const OPENROUTER_MODELS = () =>
+  (process.env.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free,nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-26b-a4b-it:free')
+    .split(',').map((x) => x.trim()).filter(Boolean).slice(0, 3);
+const llmName = () => (process.env.GEMINI_API_KEY ? 'gemini' : orKey() ? 'openrouter' : 'groq');
 export function providerLabel() {
   const p = provider();
   if (p === 'claude') return `Claude (${model()}) – placené`;
-  if (p === 'free') return `Tavily + ${process.env.GEMINI_API_KEY ? `Gemini (${GEMINI_MODEL()})` : `Groq (${GROQ_MODEL()})`} – zdarma`;
+  if (p === 'free') return `Tavily + ${{ gemini: `Gemini (${GEMINI_MODEL()})`, openrouter: `OpenRouter (${OPENROUTER_MODELS()[0]})`, groq: `Groq (${GROQ_MODEL()})` }[llmName()]} – zdarma`;
   return 'nenastaveno';
 }
 export function missingKeys() {
   if (provider()) return [];
   const m = [];
   if (!process.env.TAVILY_API_KEY) m.push('TAVILY_API_KEY');
-  if (!process.env.GEMINI_API_KEY && !process.env.GROQ_API_KEY) m.push('GEMINI_API_KEY (nebo GROQ_API_KEY)');
+  if (!process.env.GEMINI_API_KEY && !process.env.GROQ_API_KEY && !orKey()) m.push('OPENROUTER_API_KEY (nebo GEMINI_API_KEY)');
   return m;
 }
 const model = () => process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
@@ -198,7 +204,8 @@ async function postJson(url, headers, body, { fetchImpl, deadline, label }) {
     }
     if (r.status === 400 && /api key|API_KEY/i.test(msg)) throw new Error(`${label}: neplatný klíč`);
     if (r.status === 401 || r.status === 403) throw new Error(`${label}: neplatný klíč nebo chybí přístup (${msg})`);
-    if (r.status === 404) throw new Error(`${label}: model neexistuje (${msg}) – nastav jiný v proměnné ${label === 'Gemini' ? 'GEMINI_MODEL' : 'GROQ_MODEL'}`);
+    if (r.status === 404) throw new Error(`${label}: model neexistuje (${msg}) – nastav jiný v proměnné ${{ Gemini: 'GEMINI_MODEL', OpenRouter: 'OPENROUTER_MODEL', Groq: 'GROQ_MODEL' }[label]}`);
+    if (r.status === 402) throw new Error(`${label}: účet má záporný zůstatek nebo model není zdarma (${msg})`);
     if (r.status === 429) throw new Error(`${label}: vyčerpaný bezplatný limit, zkus to později`);
     throw new Error(`${label}: ${msg}`);
   }
@@ -214,6 +221,16 @@ export async function callFreeLLM(prompt, { fetchImpl = fetch, deadline = Date.n
       { fetchImpl, deadline, label: 'Gemini' }
     );
     return (j.candidates?.[0]?.content?.parts || []).map((x) => x.text || '').join('');
+  }
+  if (orKey()) {
+    const j = await postJson(
+      'https://openrouter.ai/api/v1/chat/completions',
+      { authorization: `Bearer ${orKey()}`, 'HTTP-Referer': process.env.SITE_URL || 'https://buywise.vercel.app', 'X-Title': 'BuyWise' },
+      { models: OPENROUTER_MODELS(), temperature: 0, max_tokens: 4000, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: FREE_SYSTEM }, { role: 'user', content: prompt }] },
+      { fetchImpl, deadline, label: 'OpenRouter' }
+    );
+    if (j.error) throw new Error(`OpenRouter: ${j.error.message || 'chyba modelu'}`);
+    return j.choices?.[0]?.message?.content || '';
   }
   const j = await postJson(
     'https://api.groq.com/openai/v1/chat/completions',
