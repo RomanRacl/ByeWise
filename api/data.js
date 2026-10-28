@@ -2,8 +2,9 @@
 // GET /api/data?id=…       – jeden produkt s celou historií
 // GET /api/data?view=config – veřejná konfigurace (přihlášení, push, funkce)
 // GET /api/data?view=status – stav aktualizací pro stránku Stav
-import { getDb, loadAll, getProduct, getMeta, getSettings, getDoc, hasFirebase } from './_db.js';
+import { projectId, getDb, loadAll, getProduct, getMeta, getSettings, getDoc, hasFirebase } from './_db.js';
 import { emailEnabled, pushEnabled } from './_notify.js';
+import { validId, publicError } from './_security.js';
 import { demoProducts, DEMO_RATES } from '../public/lib/seed.js';
 import { CATEGORIES, categoryById } from '../public/lib/categories.js';
 import { clean, changePct, seasonality, categorySeasonality, minMax, discountCheck } from '../public/lib/analytics.js';
@@ -64,8 +65,8 @@ export default async function handler(req, res) {
         firebase: process.env.FIREBASE_WEB_API_KEY
           ? {
               apiKey: process.env.FIREBASE_WEB_API_KEY,
-              authDomain: process.env.FIREBASE_AUTH_DOMAIN || `${process.env.FIREBASE_PROJECT_ID}.firebaseapp.com`,
-              projectId: process.env.FIREBASE_PROJECT_ID,
+              authDomain: process.env.FIREBASE_AUTH_DOMAIN || `${projectId()}.firebaseapp.com`,
+              projectId: projectId(),
               appId: process.env.FIREBASE_APP_ID || undefined,
             }
           : null,
@@ -74,7 +75,8 @@ export default async function handler(req, res) {
       });
     }
 
-    const db = await getDb();
+    const db = await getDb().catch((e) => (console.error('[data] Firebase', e), null));
+    const dbBroken = hasFirebase() && !db;
 
     if (q.view === 'status') {
       res.setHeader('Cache-Control', 's-maxage=60');
@@ -87,6 +89,7 @@ export default async function handler(req, res) {
     }
 
     if (q.id) {
+      if (!validId(q.id)) return res.status(404).json({ error: 'Produkt nenalezen' });
       const p = db ? await getProduct(q.id) : demo().find((x) => x.id === q.id);
       if (!p) return res.status(404).json({ error: 'Produkt nenalezen' });
       res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=3600');
@@ -96,10 +99,16 @@ export default async function handler(req, res) {
     let products = [];
     let meta = null;
     let settings = {};
-    let mode = 'demo';
+    let mode = dbBroken ? 'db-error' : 'demo';
     if (db) {
-      [products, meta, settings] = await Promise.all([loadAll(), getMeta(), getSettings()]);
-      mode = products.length ? 'live' : 'empty';
+      try {
+        [products, meta, settings] = await Promise.all([loadAll(), getMeta(), getSettings()]);
+        mode = products.length ? 'live' : 'empty';
+      } catch (e) {
+        // Databáze nedostupná (špatné nastavení): web běží dál s ukázkovými daty a správce to uvidí v pruhu.
+        console.error('[data] Firebase', e);
+        mode = 'db-error';
+      }
     }
     if (!products.length) products = demo();
     res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=3600');
@@ -107,10 +116,10 @@ export default async function handler(req, res) {
       mode,
       meta: meta ? { finishedAt: meta.finishedAt, rates: meta.rates || null } : { rates: DEMO_RATES },
       settings: publicSettings(settings),
-      seasons: mode === 'demo' ? (demoSeasons ||= seasonsOf(products)) : seasonsOf(products),
+      seasons: mode === 'demo' || mode === 'db-error' ? (demoSeasons ||= seasonsOf(products)) : seasonsOf(products),
       products: products.map(lighten),
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    publicError(res, e, 'data');
   }
 }

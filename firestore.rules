@@ -1,6 +1,7 @@
+// Pravidla Firestore pro BuyWise.
+// Aplikace čte a zapisuje databázi jen ze serveru (Vercel, firebase-admin), který pravidla obchází.
+// Prohlížeč do databáze přímo nesmí – proto je vše zakázané. Nasazení: Firebase → Firestore → Rules → vložit → Publish.
 rules_version = '2';
-// Veškerý přístup jde přes serverové funkce na Vercelu (firebase-admin pravidla obchází).
-// Přímý přístup z prohlížeče je proto úplně zakázaný.
 service cloud.firestore {
   match /databases/{database}/documents {
     match /{document=**} {

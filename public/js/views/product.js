@@ -83,7 +83,7 @@ export async function renderProduct(main, id) {
     title: `${esc(p.name)}${p.sample ? `<span class="sample">${t('ukázka')}</span>` : ''}`,
     titleAttrs: 'style="view-transition-name: pm-title"',
     lead: [p.subtitle ? esc(p.subtitle) : '', p.demand ? `${esc(catDemandLabel(c))}: ${esc(p.demand)}` : ''].filter(Boolean).join('<br>'),
-    below: `<div class="hero-meta">${p.rank ? `<span class="rank-pill">${t('{n}. místo v odvětví {c}', { n: p.rank, c: esc(catName(c)) })}</span>` : `<span class="rank-pill">${t('Mimo aktuální žebříček')}</span>`}${p.image ? `<img class="p-thumb" src="${esc(p.image)}" alt="" onerror="this.remove()">` : ''}</div>
+    below: `<div class="hero-meta">${p.rank ? `<span class="rank-pill">${t('{n}. místo v odvětví {c}', { n: p.rank, c: esc(catName(c)) })}</span>` : `<span class="rank-pill">${t('Mimo aktuální žebříček')}</span>`}${p.image ? `<img class="p-thumb" src="${esc(p.image)}" alt="">` : ''}</div>
       <div class="actions">
         <button type="button" class="btn glass ${fav ? 'on' : ''}" data-action="p-fav" aria-pressed="${fav}">${ICON.star}<span>${fav ? t('V oblíbených') : t('Do oblíbených')}</span></button>
         <button type="button" class="btn glass" data-action="p-cmp" aria-pressed="${inCmp}">${ICON.compare}<span>${inCmp ? t('V porovnání') : t('Porovnat')}</span></button>
@@ -191,7 +191,7 @@ export async function renderProduct(main, id) {
               const ci = compRows.indexOf(r);
               const diff = ((r.price - comp.cheapestNow.price) / comp.cheapestNow.price) * 100;
               return `<tr class="${r === comp.cheapestNow ? 'best' : ''}">
-                <td>${ci >= 0 ? `<span class="dot" style="background:${COLORS[ci]}"></span>` : ''}${r.url ? `<a href="${esc(affiliateUrl(r.url))}" target="_blank" rel="noopener sponsored">${esc(r.name)}</a>` : esc(r.name)}</td>
+                <td>${ci >= 0 ? `<span class="dot" style="background:${COLORS[ci]}"></span>` : ''}${affiliateUrl(r.url) ? `<a href="${esc(affiliateUrl(r.url))}" target="_blank" rel="noopener noreferrer sponsored">${esc(r.name)}</a>` : esc(r.name)}</td>
                 <td class="num"><strong>${money(r.price, u)}</strong></td>
                 <td class="num ${diff > 0.05 ? 'chg-up' : ''}">${diff > 0.05 ? '+' + pct(diff, false) : t('nejlevnější')}</td>
                 <td>${chip(r.trend)}</td>
@@ -306,7 +306,7 @@ export async function renderProduct(main, id) {
     heroHtml +
     sheet(`${scorePanel}${verdict}${discountBlock}${chartCard}${savings}${figures}
       <div class="acc-list section">${sections.join('')}</div>
-      <p class="note src">${t('Zdroj:')} ${esc((p.source || catNote(c)).replace(/\.$/, ''))}${p.link ? `. <a href="${esc(affiliateUrl(p.link))}" target="_blank" rel="noopener sponsored">${t('Otevřít u prodejce')}</a>` : ''}. ${t('Naposledy upraveno {d}.', { d: p.updatedAt ? dateFmt(p.updatedAt.slice(0, 10)) : '—' })}</p>`);
+      <p class="note src">${t('Zdroj:')} ${esc((p.source || catNote(c)).replace(/\.$/, ''))}${affiliateUrl(p.link) ? `. <a href="${esc(affiliateUrl(p.link))}" target="_blank" rel="noopener noreferrer sponsored">${t('Otevřít u prodejce')}</a>` : ''}. ${t('Naposledy upraveno {d}.', { d: p.updatedAt ? dateFmt(p.updatedAt.slice(0, 10)) : '—' })}</p>`);
 
   // ---------- Kreslení ----------
   const toPts = (arr) => arr.map((x) => ({ t: T(x.d), v: conv(x.p, u).v }));

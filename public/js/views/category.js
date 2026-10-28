@@ -153,7 +153,7 @@ export function renderCategory(main, id, query = new URLSearchParams()) {
     const selected = p.id === st.sel;
     return `<li data-pid="${esc(p.id)}" role="option" aria-selected="${selected}" tabindex="${selected || (!st.sel && i === 0) ? 0 : -1}" data-action="c-select" style="--i:${i}">
       <span class="tagcell"><span class="tag">${p.rank}</span>${rankMove(p)}</span>
-      <span class="who">${p.image ? `<img class="thumb" src="${esc(p.image)}" alt="" loading="lazy" onerror="this.remove()">` : ''}<span><a class="nm" href="${productLink(p.id)}" data-prefetch="${esc(p.id)}" tabindex="-1">${esc(p.name)}</a>${p.sample ? `<span class="sample">${t('ukázka')}</span>` : ''}${p.discount ? `<span class="sale">−${p.discount} %</span>` : ''}<span class="sub">${esc(p.subtitle || '')}</span><span class="dem">${esc(p.demand || '')}</span></span></span>
+      <span class="who">${p.image ? `<img class="thumb" src="${esc(p.image)}" alt="" loading="lazy">` : ''}<span><a class="nm" href="${productLink(p.id)}" data-prefetch="${esc(p.id)}" tabindex="-1">${esc(p.name)}</a>${p.sample ? `<span class="sample">${t('ukázka')}</span>` : ''}${p.discount ? `<span class="sale">−${p.discount} %</span>` : ''}<span class="sub">${esc(p.subtitle || '')}</span><span class="dem">${esc(p.demand || '')}</span></span></span>
       <span class="spark">${sparkline(s.history, s.trend.dir)}</span>
       <span class="price">${priceText(p, s)}<small>${esc(catPriceLabel(c))}</small></span>
       <span class="ch">${chip(s.trend)}<span class="small ${pctClass(s.ch30)}">${s.ch30 == null ? '' : pct(s.ch30) + ' / 30 d'}</span></span>

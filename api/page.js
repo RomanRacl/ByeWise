@@ -4,6 +4,7 @@ import { getDb, getProduct } from './_db.js';
 import { categoryById } from '../public/lib/categories.js';
 import { demoProducts } from '../public/lib/seed.js';
 import { summarize } from '../public/lib/analytics.js';
+import { cleanUrl } from './_security.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const fmt = (n) => Number(n).toLocaleString('cs-CZ', { maximumFractionDigits: n < 100 ? 2 : 0 });
@@ -11,13 +12,26 @@ let shell = null;
 let demoCache = null;
 
 export default async function handler(req, res) {
+  // Kostru stránky bere z vlastní adresy (SITE_URL nebo adresa nasazení na Vercelu), nikdy z hlavičky Host
+  // požadavku – podvržená hlavička by jinak mohla podstrčit cizí HTML do mezipaměti.
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   const proto = req.headers['x-forwarded-proto'] || 'https';
-  const origin = (process.env.SITE_URL || `${proto}://${host}`).replace(/\/$/, '');
+  const local = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(String(host || ''));
+  const origin = (process.env.SITE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : local ? `${proto}://${host}` : '')).replace(/\/$/, '');
+  if (!origin) {
+    res.statusCode = 302;
+    res.setHeader('Location', '/');
+    return res.end();
+  }
   const q = req.query || Object.fromEntries(new URL(req.url, origin).searchParams);
-  const path = String(q.path || new URL(req.url, origin).pathname).replace(/[^\w\-/.%]/g, '');
+  const path = String(q.path || new URL(req.url, origin).pathname).replace(/[^\w\-/.%]/g, '').slice(0, 200);
   try {
-    if (!shell) shell = await (await fetch(`${proto}://${host}/index.html`)).text();
+    if (!shell) {
+      const r = await fetch(`${origin}/index.html`, { signal: AbortSignal.timeout(8000) });
+      const html = r.ok ? await r.text() : '';
+      if (!/<title>[\s\S]*?<\/title>/.test(html)) throw new Error('shell');
+      shell = html;
+    }
   } catch {
     res.statusCode = 302;
     res.setHeader('Location', '/');
@@ -56,7 +70,7 @@ export default async function handler(req, res) {
         if (s.ch30 != null) parts.push(`Za 30 dní ${s.ch30 > 0 ? '+' : ''}${s.ch30.toFixed(1).replace('.', ',')} %.`);
         if (s.forecast) parts.push(`Odhad za měsíc ${fmt(s.forecast.endPrice)} ${p.unit || 'Kč'}.`);
         desc = parts.join(' ') || desc;
-        image = p.image || '';
+        image = cleanUrl(p.image) || '';
       }
     }
   } catch {}

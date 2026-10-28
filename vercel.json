@@ -1,36 +1,118 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "crons": [{ "path": "/api/cron", "schedule": "40 14 * * *" }],
+  "crons": [
+    {
+      "path": "/api/cron",
+      "schedule": "40 14 * * *"
+    }
+  ],
   "functions": {
-    "api/cron.js": { "maxDuration": 60 },
-    "api/admin.js": { "maxDuration": 60 },
-    "api/data.js": { "maxDuration": 20 },
-    "api/user.js": { "maxDuration": 15 },
-    "api/page.js": { "maxDuration": 10 },
-    "api/sitemap.js": { "maxDuration": 15 },
-    "api/v1.js": { "maxDuration": 15 }
+    "api/cron.js": {
+      "maxDuration": 60
+    },
+    "api/admin.js": {
+      "maxDuration": 60
+    },
+    "api/data.js": {
+      "maxDuration": 20
+    },
+    "api/user.js": {
+      "maxDuration": 15
+    },
+    "api/page.js": {
+      "maxDuration": 10
+    },
+    "api/sitemap.js": {
+      "maxDuration": 15
+    },
+    "api/v1.js": {
+      "maxDuration": 15
+    }
   },
   "rewrites": [
-    { "source": "/produkt/:id", "destination": "/api/page?path=/produkt/:id" },
-    { "source": "/kategorie/:id", "destination": "/api/page?path=/kategorie/:id" },
-    { "source": "/:page(prani|kalendar|pozor|rozpocet)", "destination": "/api/page?path=/:page" },
-    { "source": "/(porovnat|oblibene|portfolio|stav|admin)", "destination": "/index.html" },
-    { "source": "/sitemap.xml", "destination": "/api/sitemap" },
-    { "source": "/robots.txt", "destination": "/api/sitemap?robots=1" }
+    {
+      "source": "/produkt/:id",
+      "destination": "/api/page?path=/produkt/:id"
+    },
+    {
+      "source": "/kategorie/:id",
+      "destination": "/api/page?path=/kategorie/:id"
+    },
+    {
+      "source": "/:page(prani|kalendar|pozor|rozpocet)",
+      "destination": "/api/page?path=/:page"
+    },
+    {
+      "source": "/(porovnat|oblibene|portfolio|stav|admin)",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/sitemap.xml",
+      "destination": "/api/sitemap"
+    },
+    {
+      "source": "/robots.txt",
+      "destination": "/api/sitemap?robots=1"
+    }
   ],
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://commons.wikimedia.org https://upload.wikimedia.org https://*.googleapis.com https://www.gstatic.com https://cdn.jsdelivr.net; frame-src https://*.firebaseapp.com https://accounts.google.com https://apis.google.com; worker-src 'self'; manifest-src 'self'; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+        },
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=63072000; includeSubDomains"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), bluetooth=(), serial=(), browsing-topics=()"
+        },
+        {
+          "key": "Cross-Origin-Opener-Policy",
+          "value": "same-origin-allow-popups"
+        },
+        {
+          "key": "X-Permitted-Cross-Domain-Policies",
+          "value": "none"
+        }
       ]
     },
     {
       "source": "/sw.js",
       "headers": [
-        { "key": "Cache-Control", "value": "no-cache" },
-        { "key": "Service-Worker-Allowed", "value": "/" }
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        },
+        {
+          "key": "Service-Worker-Allowed",
+          "value": "/"
+        }
+      ]
+    },
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex"
+        }
       ]
     }
   ]

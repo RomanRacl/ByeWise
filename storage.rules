@@ -1,0 +1,12 @@
+// Pravidla Firebase Storage pro BuyWise.
+// Zálohy (zalohy/) a nahrané fotky (fotky/) zapisuje jen server. Fotky se zobrazují přes odkaz
+// se stahovacím tokenem, který pravidla nepotřebuje – přímý přístup z prohlížeče je proto zakázaný.
+// Nasazení: Firebase → Storage → Rules → vložit → Publish.
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -2,7 +2,7 @@
 import { S, CATEGORIES, categoryById, esc, money, dateFmt, link, toast, downloadFile, store } from '../core.js';
 import { clean } from '../../lib/analytics.js';
 import { parseCsv, parseRankingText, parseSda, parseAffiliateRules } from '../../lib/dataops.js';
-import { adminApi, adminAuth, adminLocal } from '../admin-api.js';
+import { adminApi, adminAuth, adminLocal, adminLogin, adminLogout } from '../admin-api.js';
 import { login, authAvailable } from '../user.js';
 import { actions } from '../ui.js';
 import { hero, sheet } from '../core.js';
@@ -70,23 +70,43 @@ export async function uploadPhoto(file, name) {
 }
 const uploadField = (target, label = 'Nahrát fotku') => `<label class="btn alt upload"><input type="file" accept="image/*" data-upload="${target}" hidden>${label}</label>`;
 
+// Typičtí prodejci pro nová odvětví (feed od nich získáš přes affiliate síť nebo přímo od e-shopu).
+const FEED_HINTS = {
+  mobily: { shops: ['Alza', 'Datart', 'CZC', 'Mobil Pohotovost', 'iStyle'] },
+  sport: { shops: ['Sportisimo', 'Top4Running', 'Hervis', 'Insportline', 'Alza'] },
+  kosmetika: { shops: ['Notino', 'Douglas', 'Dr.Max', 'Benu', 'Alza'] },
+  elektro: { shops: ['Alza', 'Datart', 'CZC', 'Planeo', 'Mall'] },
+};
+
+// Diagnostika nastavení Vercel ↔ Firebase (hodnoty se nezobrazují, jen jestli jsou v pořádku).
+function diagnostics(h) {
+  const rows = Object.entries(h.config)
+    .map(([k, v]) => `<tr><td><code>${esc(k)}</code></td><td class="${v === 'ok' || v.startsWith('ok') ? 'chg-down' : v.startsWith('nevyplněno') ? 'muted' : 'chg-up'}">${esc(v)}</td></tr>`)
+    .join('');
+  return `<div class="notice warn diag"><p><strong>Server se nemůže připojit k databázi.</strong> ${esc(h.firestore)}</p>
+    <table class="cmp"><tbody>${rows}</tbody></table>
+    <p class="small">Proměnné opravíš na Vercelu: projekt → <b>Settings → Environment Variables</b>. Pak <b>Deployments → ⋯ → Redeploy</b> (změny se projeví až po novém nasazení). Do té doby web ukazuje ukázková data.</p></div>`;
+}
+
 const catOptions = (sel) => CATEGORIES.map((c) => `<option value="${c.id}" ${c.id === sel ? 'selected' : ''}>${esc(c.name)}${c.source === 'auto' ? ' (automaticky)' : ''}</option>`).join('');
 
 export async function renderAdmin(main) {
   document.title = 'Administrace – BuyWise';
-  if (!adminLocal && !adminAuth.pw && !(adminAuth.useGoogle && S.user)) {
+  if (!adminLocal && !adminAuth.session && !(adminAuth.useGoogle && S.user)) {
     main.innerHTML = hero({ title: 'Administrace', lead: 'Správa produktů, cen, importů a nastavení.' }) + sheet(`<div class="admin">
       <form class="card" id="login"><label class="field">Heslo administrátora<input type="password" id="pw" autocomplete="current-password"></label>
       <div class="btns"><button class="btn" type="submit">Přihlásit</button>${authAvailable() ? `<button class="btn alt" type="button" data-action="adm-glogin">Přihlásit přes Google (správci)</button>` : ''}</div><p class="msg" id="lmsg"></p></form></div>`);
     main.querySelector('#login').addEventListener('submit', async (e) => {
       e.preventDefault();
-      adminAuth.pw = main.querySelector('#pw').value;
+      const btn = e.target.querySelector('[type=submit]');
+      btn.disabled = true;
       try {
-        await adminApi('status');
+        await adminLogin(main.querySelector('#pw').value);
         renderAdmin(main);
       } catch (err) {
-        adminAuth.pw = '';
         msg(main.querySelector('#lmsg'), err.message);
+      } finally {
+        btn.disabled = false;
       }
     });
     actions({ 'adm-glogin': async () => {
@@ -115,9 +135,8 @@ export async function renderAdmin(main) {
     <nav class="seg admin-tabs" role="tablist">${tabs.map(([k, l]) => `<button type="button" role="tab" data-action="adm-tab" data-tab="${k}" aria-pressed="${adm.tab === k}">${l}</button>`).join('')}</nav>
     <div id="pane"></div></div>`);
   actions({
-    'adm-logout': () => {
-      adminAuth.pw = '';
-      adminAuth.useGoogle = false;
+    'adm-logout': async () => {
+      await adminLogout();
       renderAdmin(main);
     },
     'adm-tab': (b) => {
@@ -127,6 +146,24 @@ export async function renderAdmin(main) {
     },
   });
   showTab(main.querySelector('#pane'));
+  if (!adminLocal) {
+    // Relace vypršela (8 h) nebo se změnilo heslo → zpět na přihlášení.
+    if (!renderAdmin.bound) {
+      renderAdmin.bound = true;
+      window.addEventListener('pm-admin-expired', () => {
+        if (location.pathname.startsWith('/admin') || location.hash.startsWith('#/admin')) renderAdmin(document.getElementById('main'));
+      });
+    }
+    // Kontrola nastavení serveru: když něco chybí, ukáže přesně co a kde to opravit.
+    adminApi('health')
+      .then(({ health: h }) => {
+        const box = main.querySelector('.admin');
+        if (!box) return;
+        if (h.config.ADMIN_PASSWORD !== 'ok' && h.config.ADMIN_PASSWORD.startsWith('nastaveno')) box.insertAdjacentHTML('afterbegin', '<p class="notice warn"><strong>Slabé heslo administrace.</strong> ADMIN_PASSWORD má méně než 12 znaků. Na Vercelu ho změň na dlouhé náhodné heslo (např. 4–5 slov), přihlášení se tím zneplatní.</p>');
+        if (!h.ok) box.insertAdjacentHTML('afterbegin', diagnostics(h));
+      })
+      .catch((err) => main.querySelector('.admin')?.insertAdjacentHTML('afterbegin', `<p class="notice warn">${esc(err.message)}</p>`));
+  }
   return true;
 }
 
@@ -399,7 +436,7 @@ async function tabSettings(pane) {
     pane.innerHTML = `<p class="msg err">${esc(e.message)}</p>`;
     return;
   }
-  const feedRow = (f = {}) => `<div class="feed-row"><select data-f="category">${catOptions(f.category || 'elektro')}</select><input data-f="competitor" placeholder="Prodejce (např. Alza)" value="${esc(f.competitor || '')}"><input data-f="url" placeholder="https://… (Heureka XML, Google feed nebo CSV)" value="${esc(f.url || '')}"><button type="button" class="btn alt" data-action="adm-test-feed">Otestovat</button><button type="button" class="btn danger" data-action="adm-rm-row" aria-label="Odebrat feed">✕</button></div>`;
+  const feedRow = (f = {}) => `<div class="feed-row"><select data-f="category" aria-label="Odvětví">${catOptions(f.category || 'elektro')}</select><input data-f="competitor" aria-label="Prodejce" placeholder="Prodejce (např. ${esc(FEED_HINTS[f.category]?.shops[0] || 'Alza')})" value="${esc(f.competitor || '')}"><input data-f="url" aria-label="Adresa feedu" placeholder="https://… (Heureka XML, Google feed, XML sítě nebo CSV)" value="${esc(f.url || '')}"><label class="toggle small" title="Hlavní cena produktu = nejnižší dnešní cena z feedů"><input type="checkbox" data-f="mainPrice" ${f.mainPrice === false ? '' : 'checked'}> hlavní cena</label><button type="button" class="btn alt" data-action="adm-test-feed">Otestovat</button><button type="button" class="btn danger" data-action="adm-rm-row" aria-label="Odebrat feed">✕</button></div>`;
   pane.innerHTML = `<form class="card" id="sform">
     <h3>Inflace</h3><p class="small muted">Produkty se porovnají s meziroční inflací (ČSÚ).</p>
     <div class="grid2"><label class="field">Meziroční inflace (%)<input name="yoy" inputmode="decimal" value="${esc(s.inflation?.yoy ?? '')}"></label><label class="field">Za období<input name="ilabel" placeholder="září 2026" value="${esc(s.inflation?.label || '')}"></label></div>
@@ -407,7 +444,13 @@ async function tabSettings(pane) {
     <label class="field"><textarea name="aff" placeholder="alza.cz | {url}?idp=12345&#10;datart.cz | https://partner.example/?u={url_enc}">${esc((s.affiliates || []).map((a) => `${a.domain} | ${a.template}`).join('\n'))}</textarea></label>
     ${adminLocal ? '' : `<h3>Sponzor týdenního e-mailu</h3><div class="grid2"><label class="field">Text<input name="sptext" value="${esc(s.sponsor?.text || '')}"></label><label class="field">Odkaz<input name="spurl" value="${esc(s.sponsor?.url || '')}"></label></div>
     <h3>Schvalování</h3><label class="field inline"><input type="checkbox" name="approval" ${s.requireApproval ? 'checked' : ''}> Změny pořadí z automatické aktualizace čekají na moje schválení (ceny se ukládají hned)</label>
-    <h3>Feedy e-shopů</h3><p class="small muted">Každý den se z feedu načtou ceny a přiřadí se produktům v odvětví (podle EAN nebo názvu). Limit 30 MB na feed.</p>
+    <h3>Feedy e-shopů</h3><p class="small muted">Každý den se z feedu načtou ceny a přiřadí se produktům v odvětví – podle EAN, jinak podle názvu: musí sedět všechna slova z názvu i čísla z podtitulu (256 GB, 100 ml), příslušenství (kryty, testery, řemínky…) a jiné varianty (Pro, Max, Ultra…) se vynechají. U elektra, mobilů, sportu a kosmetiky je „hlavní cena“ produktu nejnižší dnešní cena z feedů. Formáty: Heureka/Zboží XML, Google Merchant, XML affiliate sítí (eHUB, Dognet…), CSV. Limit 30 MB, i .gz. Adresy uvnitř tvé sítě (localhost, 10.x, 192.168.x…) server z bezpečnostních důvodů nestáhne.</p>
+    <div class="feed-presets">${Object.entries(FEED_HINTS).map(([cat, h]) => `<div class="feed-preset"><b>${esc(categoryById(cat).name)}</b><span class="small muted">${esc(h.shops.join(', '))}</span><button type="button" class="btn alt" data-action="adm-preset-feed" data-cat="${cat}">+ feed</button></div>`).join('')}</div>
+    <details class="more"><summary>Kde feed získat</summary><ul class="small">
+      <li><b>Affiliate sítě</b> (eHUB, Dognet, CJ, Awin): po registraci a schválení do kampaně e-shopu dostaneš odkaz na produktový XML feed, často už s tvým partnerským odkazem.</li>
+      <li><b>Vlastní affiliate program e-shopu</b>: velké e-shopy mívají partnerský program s exportem produktů.</li>
+      <li><b>Přímo od e-shopu</b>: napiš jim o odkaz na jejich Heureka/Zboží/Google feed – bývá veřejný na adrese typu <code>/export/heureka.xml</code>.</li>
+      <li>Odkaz s osobním klíčem drž v tajnosti: ukládá se jen na serveru, návštěvníci ho nevidí.</li></ul></details>
     <div id="feeds">${(s.feeds || []).map(feedRow).join('')}</div><div class="btns"><button type="button" class="btn alt" data-action="adm-add-feed">Přidat feed</button></div><div id="ftest"></div>`}
     <h3>Fotky na pozadí</h3><p class="small muted">Bez vyplnění se berou fotky z Wikimedia Commons. Pro vlastní fotky zadej u odvětví jeden odkaz na řádek, volitelně s popiskem: <code>https://…/foto.jpg | Autor, licence</code>. Pole „Přehled“ platí pro úvodní stránku.</p>
     <div class="acc-list">${[['home', 'Přehled'], ...Object.keys(PHOTO_SETS).map((id) => [id, categoryById(id)?.name || id])]
@@ -422,13 +465,17 @@ async function tabSettings(pane) {
   actions({
     'adm-rm-row': (b) => b.parentElement.remove(),
     'adm-add-feed': () => feeds.insertAdjacentHTML('beforeend', feedRow()),
+    'adm-preset-feed': (b) => {
+      feeds.insertAdjacentHTML('beforeend', feedRow({ category: b.dataset.cat }));
+      feeds.lastElementChild.querySelector('[data-f=competitor]').focus();
+    },
     'adm-test-feed': (b) =>
           busy(b, async () => {
             const row = b.parentElement;
             const out = pane.querySelector('#ftest');
             try {
               const r = await adminApi('testFeed', { url: row.querySelector('[data-f=url]').value, category: row.querySelector('[data-f=category]').value });
-              out.innerHTML = `<p class="msg ok">Feed obsahuje ${r.items} položek, spárováno ${r.matched.length} produktů.</p>${r.matched.length ? `<ul class="small">${r.matched.map((m) => `<li>${esc(m.product)} → ${esc(m.item)}: ${esc(m.price)} Kč</li>`).join('')}</ul>` : ''}`;
+              out.innerHTML = `<p class="msg ok">Feed (${esc(r.format || '?')}) obsahuje ${esc(r.items)} položek, spárováno ${r.matched.length} produktů.</p>${r.matched.length ? `<ul class="small">${r.matched.map((m) => `<li>${esc(m.product)} → ${esc(m.item)}: ${esc(m.price)} Kč${m.ean ? ' (EAN)' : ''}</li>`).join('')}</ul>` : ''}${r.unmatched?.length ? `<p class="small muted">Nenalezeno: ${r.unmatched.map(esc).join(', ')}. Doplň u produktu EAN nebo uprav název/podtitul podle feedu.</p>` : ''}`;
             } catch (err) {
               out.innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
             }
@@ -448,7 +495,7 @@ async function tabSettings(pane) {
           .map((ta) => [ta.dataset.bg, ta.value.split(/\r?\n/).map((l) => l.split('|').map((x) => x.trim())).filter(([u]) => /^https?:\/\//.test(u || '') || (adminLocal && /^data:image\//.test(u || ''))).map(([url, credit]) => ({ url, credit: credit || '' }))])
           .filter(([, list]) => list.length)
       ),
-      feeds: feeds ? [...feeds.querySelectorAll('.feed-row')].map((r) => Object.fromEntries([...r.querySelectorAll('[data-f]')].map((i) => [i.dataset.f, i.value.trim()]))).filter((x) => x.url && x.competitor) : [],
+      feeds: feeds ? [...feeds.querySelectorAll('.feed-row')].map((r) => Object.fromEntries([...r.querySelectorAll('[data-f]')].map((i) => [i.dataset.f, i.type === 'checkbox' ? i.checked : i.value.trim()]))).filter((x) => x.url && x.competitor) : [],
     };
     try {
       await adminApi('setSettings', { settings });

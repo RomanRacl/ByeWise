@@ -6,6 +6,7 @@ import { getDb, loadAll, getProduct } from './_db.js';
 import { demoProducts } from '../public/lib/seed.js';
 import { CATEGORIES, categoryById } from '../public/lib/categories.js';
 import { summarize } from '../public/lib/analytics.js';
+import { safeEqual, validId, publicError } from './_security.js';
 
 let demoCache = null;
 
@@ -34,7 +35,8 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(204).end();
   const q = req.query || Object.fromEntries(new URL(req.url, 'http://x').searchParams);
   const keys = String(process.env.API_KEYS || '').split(',').map((s) => s.trim()).filter(Boolean);
-  if (keys.length && !keys.includes(String(req.headers['x-api-key'] || q.key || ''))) {
+  const given = String(req.headers['x-api-key'] || q.key || '');
+  if (keys.length && !keys.some((k) => safeEqual(k, given))) {
     return res.status(401).json({ error: 'Chybí nebo je neplatný API klíč (hlavička x-api-key)' });
   }
   try {
@@ -42,6 +44,7 @@ export default async function handler(req, res) {
     const all = db ? await loadAll() : (demoCache ||= demoProducts());
     res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=3600');
     if (q.id) {
+      if (!validId(q.id)) return res.status(404).json({ error: 'Produkt nenalezen' });
       const p = db ? await getProduct(q.id) : all.find((x) => x.id === q.id);
       if (!p) return res.status(404).json({ error: 'Produkt nenalezen' });
       return res.json({ ...stats(p), category: p.category, history: p.prices, competitors: (p.competitors || []).map((c) => ({ name: c.name, history: c.prices })) });
@@ -57,6 +60,6 @@ export default async function handler(req, res) {
       categories: CATEGORIES.map((c) => ({ id: c.id, name: c.name, nameEn: c.en, group: c.group, source: c.source, url: `/api/v1?category=${c.id}` })),
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    publicError(res, e, 'v1');
   }
 }

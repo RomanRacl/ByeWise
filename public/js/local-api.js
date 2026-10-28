@@ -19,7 +19,9 @@ import { categoryById } from '../lib/categories.js';
 import { demoProducts, seedProducts } from '../lib/seed.js';
 import { merge, parseCsv, applyImport } from '../lib/dataops.js';
 
-export const adminAuth = { pw: 'local', useGoogle: false };
+export const adminAuth = { session: true, useGoogle: false };
+export const adminLogin = async () => {};
+export const adminLogout = async () => {};
 export const adminLocal = true;
 
 function persistLocal(note) {

@@ -5,7 +5,7 @@ import { demoProducts } from '../public/lib/seed.js';
 
 export default async function handler(req, res) {
   const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost';
-  const base = (process.env.SITE_URL || `https://${host}`).replace(/\/$/, '');
+  const base = (process.env.SITE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `https://${host}`)).replace(/\/$/, '');
   const q = req.query || Object.fromEntries(new URL(req.url, 'http://x').searchParams);
   if (q.robots) {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');

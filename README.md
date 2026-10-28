@@ -70,7 +70,7 @@ Běží jako statický web + serverové funkce na **Vercelu**, data jsou ve **Fi
 ```bash
 npm install
 npm run dev        # http://localhost:3000
-npm test           # 24 testů (výpočty, skóre, rozpočet, importy, celý server se simulovaným Firebase)
+npm test           # 30 testů (výpočty, skóre, rozpočet, feedy, bezpečnost, celý server se simulovaným Firebase)
 ```
 
 Pro připojení k Firebase zkopíruj `.env.example` do `.env.local` a vyplň hodnoty.
@@ -80,8 +80,10 @@ Pro připojení k Firebase zkopíruj `.env.example` do `.env.local` a vyplň hod
 ### 1. Firebase
 1. Na https://console.firebase.google.com vytvoř projekt.
 2. **Build → Firestore Database → Create database** (režim *production*, lokace `eur3` nebo `europe-west3`).
-3. V záložce **Rules** vlož obsah souboru `firestore.rules` a publikuj (prohlížeč do databáze nesmí, všechno jde přes server).
-4. **Project settings → Service accounts → Generate new private key.** Stáhne se JSON. Nikdy ho nedávej na GitHub.
+3. V záložce **Rules** vlož obsah souboru `firestore.rules` a publikuj (prohlížeč do databáze nesmí, všechno jde přes server). **Důležité:** nový projekt v „test mode“ má databázi 30 dní otevřenou celému internetu – pravidla nastav hned.
+4. Volitelně **Firestore → TTL policies**: kolekce `ratelimit`, pole `expireAt` (staré záznamy o pokusech se mažou samy).
+5. **Storage** (pro zálohy a nahrané fotky): v záložce **Rules** vlož obsah `storage.rules` a publikuj.
+6. **Project settings → Service accounts → Generate new private key.** Stáhne se JSON. Nikdy ho nedávej na GitHub (`.gitignore` ho vynechá).
 
 ### 2. GitHub
 ```bash
@@ -97,7 +99,9 @@ git push -u origin main
 1. https://vercel.com → **Add New → Project** → vyber repozitář.
 2. Framework Preset: **Other**. Build ani output nenastavuj.
 3. V **Environment Variables** vyplň aspoň povinné proměnné z `.env.example`:
-   `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, `ADMIN_PASSWORD`, `CRON_SECRET`, a doporučeně `SITE_URL`.
+   `FIREBASE_SERVICE_ACCOUNT` (celý obsah staženého JSON klíče – nejspolehlivější, klíč se tak nepoškodí kopírováním), `ADMIN_PASSWORD`, `CRON_SECRET`, a doporučeně `SITE_URL`.
+   Místo `FIREBASE_SERVICE_ACCOUNT` jdou použít i tři proměnné `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`.
+   Když něco nesedí, administrace po přihlášení ukáže tabulku, která proměnná je špatně a proč.
 4. **Deploy.** Vlastní doménu nastavíš v **Settings → Domains**.
 
 ### 4. První naplnění
@@ -120,7 +124,7 @@ Automatická aktualizace pak běží **každý den v 15:40** (Vercel Cron). Poš
 | Automatické zálohy a nahrávání fotek | Firebase → **Storage** → Get started, název bucketu do `FIREBASE_STORAGE_BUCKET`. Nahrané fotky se zobrazují přes odkaz se stahovacím tokenem, bucket nemusí být veřejný. |
 | Návštěvnost | Vercel → projekt → **Analytics → Enable** (skript se načítá sám). |
 | Affiliate odkazy | Administrace → Nastavení: `alza.cz \| {url}?idp=TVOJE_ID` (programy mají Alza, Heureka, Datart, CK…). |
-| Ceny z e-shopů | Administrace → Nastavení → Feedy: odvětví, prodejce a URL feedu (Heureka XML, Google Merchant nebo CSV `název;cena;odkaz;ean`). Tlačítko **Otestovat** ukáže, kolik produktů se spárovalo. Limit 30 MB na feed. |
+| Ceny z e-shopů | Viz kapitola **Feedy e-shopů** níže. |
 
 ## Jak se data plní
 
@@ -137,6 +141,51 @@ Automatická aktualizace pak běží **každý den v 15:40** (Vercel Cron). Poš
 | Dovolené, tarify, vstupenky, nemovitosti, ojeté vozy, pohonné hmoty | CSV/Excel nebo hromadná úprava | týdně až měsíčně |
 
 **Každé uložení ceny přidá dnešní záznam do historie.** Odhad potřebuje aspoň 6 záznamů za aspoň 10 dní, sezónnost aspoň rok.
+
+## Feedy e-shopů (mobily, sport, kosmetika, elektro)
+
+Ceny prodejců a u těchto odvětví i **hlavní cena** (nejnižší dnešní cena z feedů) se plní každý den samy.
+
+1. **Získej odkaz na feed.** Nejschůdnější cesta je affiliate síť ([eHUB](https://ehub.cz/en/publishers-manual), Dognet, CJ, Awin): zaregistruješ se, požádáš o kampaň e-shopu a v rozhraní sítě najdeš odkaz na produktový XML feed (obvykle už s tvým partnerským odkazem, takže z prokliků máš provizi). Jinak vlastní partnerský program e-shopu nebo přímo e-mail e-shopu s prosbou o jejich Heureka/Zboží/Google feed.
+2. **Administrace → Nastavení → Feedy e-shopů → „+ feed“** u Mobilů, Sportu nebo Kosmetiky, vyplň prodejce a odkaz.
+3. **Otestovat** ukáže formát, počet položek, co se spárovalo (i jestli podle EAN) a **které produkty se nenašly**.
+4. U nenalezených doplň v editoru produktu **EAN** (nejspolehlivější), případně uprav název/podtitul tak, aby odpovídal feedu (podtitul nese kapacitu nebo objem: „256 GB“, „EDT 100 ml“).
+5. **Uložit nastavení.** Od další denní aktualizace (15:40) se ceny plní samy; výsledek každého feedu je na stránce **Stav dat**.
+
+**Jak párování funguje:** EAN má přednost. Jinak musí položka feedu obsahovat všechna slova z názvu produktu i všechna čísla z názvu a podtitulu (256 GB, 100 ml, 55"). Vynechá se příslušenství (kryt, sklo, řemínek, tester, náplně…), jiné varianty modelu (Pro, Max, Ultra, FE, Lite…) i nabídky s nesmyslnou cenou (pod 45 % nebo nad 220 % poslední ceny). Zboží „out of stock“ z Google feedu se přeskočí.
+
+**Formáty:** Heureka/Zboží XML (`SHOPITEM`), Google Merchant (RSS/Atom s `g:`), XML affiliate sítí (`<product>` s name/price/url nebo deeplink), CSV/TSV s hlavičkou (název, cena, odkaz, ean) i bez ní. Feed může být i zabalený `.gz`; limit 30 MB.
+
+**Hlavní cena z feedů** platí pro elektro, mobily, sport a kosmetiku. U konkrétního feedu ji vypneš zaškrtávátkem „hlavní cena“ (pak plní jen ceny prodejce).
+
+## Zabezpečení
+
+Aplikace prošla bezpečnostní kontrolou (30 automatických testů včetně simulovaných útoků v `tests/security.test.js`).
+
+| Hrozba | Ochrana |
+|---|---|
+| Hádání hesla do administrace | Heslo se posílá jen při přihlášení; po **8 špatných pokusech** je IP na **15 minut zablokovaná** (i pro správné heslo). Neúspěšné pokusy jsou v Historii úprav. Při heslu kratším než 12 znaků administrace ukáže varování. |
+| Krádež přihlášení (XSS) | Heslo se v prohlížeči **neukládá**. Přihlášení drží podepsaný token v **HttpOnly cookie** (JavaScript ho nevidí), platí 8 hodin, změnou `ADMIN_PASSWORD` se zneplatní všechna. |
+| CSRF (podvržený požadavek z cizího webu) | Cookie `SameSite=Strict` + povinná hlavička `x-bw-admin` + API přijímá jen `application/json` (formulář z cizí stránky neprojde). |
+| XSS – vložení skriptu | Veškerý text se escapuje; odkazy jen `http(s)` (odkaz `javascript:` z feedu, importu nebo nastavení se zahodí na serveru i v prohlížeči); **Content-Security-Policy** zakazuje cizí a vložené skripty, inline obsluhy událostí i cizí rámy. |
+| SSRF – zneužití stahování feedů | Server nestáhne adresy do vnitřní sítě (localhost, 10.x, 192.168.x, 169.254.169.254 metadata cloudu, IPv6 lokální), kontroluje i DNS a **každé přesměrování**, jen porty 80/443/8080/8443, časový limit 25 s, limit 30 MB i bez Content-Length. |
+| Podvržené soubory | Nahraná fotka se kontroluje podle **skutečného obsahu** (JPEG/PNG/WebP), ne podle přípony; HTML/SVG převlečené za obrázek neprojde. Max. 3,5 MB. |
+| Přístup do databáze z internetu | Firestore i Storage mají pravidla „vše zakázáno“ (`firestore.rules`, `storage.rules`); data čte a zapisuje jen server. |
+| Zahlcení / spam | Omezení počtu požadavků: push hlídače bez přihlášení 20/h na IP, přihlášení uživatelé 300/10 min. Limity délek a počtů (seznamy, importy, zálohy, feedy). |
+| Neplatná ID a vstupy | ID produktů jen `a-z0-9-` (žádné cesty v databázi), čísla v rozumných mezích, texty zkrácené, nastavení a obnova ze zálohy procházejí stejnou kontrolou. |
+| Únik informací | Chyby pro veřejnost bez podrobností (ty jsou v logu Vercelu); porovnání tajných klíčů v konstantním čase (cron, API klíče); SEO stránka nevěří hlavičce `Host`. |
+| Clickjacking, sniffing, HTTPS | `frame-ancestors 'none'` + `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Strict-Transport-Security`, `Permissions-Policy`, `Referrer-Policy`. |
+| Zranitelné knihovny | `.github/dependabot.yml` každý týden zkontroluje balíčky a otevře pull request s opravou. Ručně: `npm audit`. |
+
+**Co udělat po nasazení (5 minut):**
+1. Silné `ADMIN_PASSWORD` (4–5 náhodných slov) a `CRON_SECRET` (aspoň 16 znaků) – nikdy je nikomu neposílej a nedávej do GitHubu.
+2. Pravidla `firestore.rules` a `storage.rules` ve Firebase (viz Nasazení).
+3. Firebase → Authentication → Settings: zapnout **Email enumeration protection** (útočník nezjistí, které e-maily mají účet) a v **Authorized domains** nechat jen svou doménu.
+4. Vercel → Settings → Security: **Attack Challenge Mode** zapni, pokud by web někdo zahlcoval.
+5. Na GitHubu u repozitáře zapni **Dependabot alerts** a **Secret scanning**.
+6. Ověření hlaviček: https://securityheaders.com a https://observatory.mozilla.org (zadej svou doménu).
+
+**Co zabezpečení neřeší:** odkazy na feedy s osobním klíčem jsou uložené ve Firestore (vidí je jen administrátor, ne návštěvníci) – kdo má přístup k Firebase projektu, vidí vše. Do Firebase konzole a na Vercel si zapni dvoufázové ověření.
 
 ## Samostatná HTML verze
 
@@ -193,7 +242,9 @@ api/cron.js         denní aktualizace (Vercel Cron)
 api/v1.js           veřejné API
 api/page.js         SEO náhledy stránek produktů a odvětví
 api/sitemap.js      sitemap.xml a robots.txt
-api/_*.js           sdílené: databáze, zdroje dat, aktualizace, oznámení, ověření
+api/_*.js           sdílené: databáze, zdroje dat, aktualizace, oznámení, ověření, _security.js (zabezpečení)
+firestore.rules     pravidla databáze (vše zakázáno, přístup jen přes server)
+storage.rules       pravidla úložiště souborů
 tests/              testy + simulovaný Firebase
 build-html.js       sestavení samostatné HTML verze
 scripts/vapid.js    generátor klíčů pro push

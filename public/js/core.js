@@ -145,7 +145,16 @@ export function priceText(p, s) {
   return money(s.price, p.unit);
 }
 
-export const affiliateUrl = (url) => affiliate(url, S.data?.settings?.affiliates || []);
+// Bezpečný odkaz: jen http(s). Odkazy pocházejí i z cizích feedů e-shopů, takže „javascript:…“ se nesmí dostat do href.
+export function safeHref(u) {
+  try {
+    const url = new URL(String(u || ''), location.href);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+export const affiliateUrl = (url) => safeHref(affiliate(safeHref(url), S.data?.settings?.affiliates || []));
 
 // ---------- Odkazy a navigace ----------
 export const link = (path) => (S.hash ? '#' + path : path);

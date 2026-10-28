@@ -2,7 +2,7 @@
 const HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; BuyWise/2.0)', Accept: 'application/json,text/plain,*/*' };
 
 async function getJson(url, headers = {}) {
-  const r = await fetch(url, { headers: { ...HEADERS, ...headers } });
+  const r = await fetch(url, { headers: { ...HEADERS, ...headers }, signal: AbortSignal.timeout(20000) });
   if (!r.ok) throw new Error(`${r.status} ${new URL(url).hostname}`);
   return r.json();
 }
@@ -11,7 +11,7 @@ async function getJson(url, headers = {}) {
 const CNB_URL = 'https://www.cnb.cz/cs/financni-trhy/devizovy-trh/kurzy-devizoveho-trhu/kurzy-devizoveho-trhu/denni_kurz.txt';
 
 export async function cnbRates() {
-  const r = await fetch(CNB_URL, { headers: HEADERS });
+  const r = await fetch(CNB_URL, { headers: HEADERS, signal: AbortSignal.timeout(15000) });
   if (!r.ok) throw new Error(`ČNB ${r.status}`);
   const lines = (await r.text()).trim().split('\n');
   const rates = { date: lines[0].split(' ')[0], CZK: 1 };
@@ -159,14 +159,4 @@ export async function steamPlayers(appid) {
   }
 }
 
-// ---------- Feedy e-shopů ----------
-const FEED_MAX = 30 * 1024 * 1024;
-export async function fetchFeed(url) {
-  const r = await fetch(url, { headers: { ...HEADERS, Accept: 'application/xml,text/xml,text/csv,*/*' } });
-  if (!r.ok) throw new Error(`feed ${r.status}`);
-  const len = +r.headers.get('content-length') || 0;
-  if (len > FEED_MAX) throw new Error(`feed je moc velký (${Math.round(len / 1e6)} MB, limit 30 MB)`);
-  const text = await r.text();
-  if (text.length > FEED_MAX) throw new Error('feed je moc velký (limit 30 MB)');
-  return text;
-}
+// Feedy e-shopů stahuje safeFetch v _security.js (ochrana proti SSRF, limit velikosti a času).

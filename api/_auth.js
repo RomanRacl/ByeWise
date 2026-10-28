@@ -1,6 +1,6 @@
-// Ověření uživatele (Firebase přihlášení Googlem) a administrátora (heslo nebo e-mail v ADMIN_EMAILS).
-import { timingSafeEqual } from 'node:crypto';
+// Ověření uživatele (Firebase přihlášení) a administrátora (relace po zadání hesla, nebo Google účet z ADMIN_EMAILS).
 import { getAuth } from './_db.js';
+import { safeEqual, verifySession, readCookie, SESSION_COOKIE } from './_security.js';
 
 export async function verifyUser(req) {
   const h = String(req.headers.authorization || '');
@@ -15,12 +15,13 @@ export async function verifyUser(req) {
   }
 }
 
-function passwordOk(req) {
+// Heslo se kontroluje jen při přihlášení (akce „login“, s omezením počtu pokusů).
+export function passwordOk(password) {
   const expected = process.env.ADMIN_PASSWORD || '';
-  const got = String(req.headers['x-admin-password'] || '');
-  if (!expected || !got || got.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(got), Buffer.from(expected));
+  if (!expected || !password) return false;
+  return safeEqual(password, expected);
 }
+export const weakAdminPassword = () => String(process.env.ADMIN_PASSWORD || '').length < 12;
 
 export const adminEmails = () =>
   String(process.env.ADMIN_EMAILS || '')
@@ -29,8 +30,12 @@ export const adminEmails = () =>
     .filter(Boolean);
 
 // Vrací { who } pro povolený přístup, jinak null.
+// Relace v HttpOnly cookie platí jen s hlavičkou x-bw-admin (ochrana proti CSRF: cizí web ji poslat nemůže).
 export async function verifyAdmin(req) {
-  if (passwordOk(req)) return { who: 'heslo administrátora' };
+  if (req.headers['x-bw-admin'] === '1') {
+    const sess = verifySession(readCookie(req, SESSION_COOKIE));
+    if (sess) return { who: sess.who || 'heslo administrátora' };
+  }
   const u = await verifyUser(req);
   if (u && u.emailVerified && adminEmails().includes(u.email.toLowerCase())) return { who: u.email };
   return null;

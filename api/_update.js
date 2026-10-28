@@ -3,11 +3,12 @@
 import { loadAll, saveProducts, setMeta, getMeta, getSettings, setDoc, listCollection, getDb, getBucket, todayIso, audit } from './_db.js';
 import {
   cnbRates, COMMODITIES, STOCKS, yahooHistory, relativeVolume, cryptoTop, cryptoHistory,
-  steamTopSellers, steamMostPlayed, steamAppDetails, steamPlayers, fetchFeed,
+  steamTopSellers, steamMostPlayed, steamAppDetails, steamPlayers,
 } from './_sources.js';
+import { safeFetch } from './_security.js';
 import { sendEmail, sendPush, notifyAdmin, emailEnabled, pushEnabled, emailLayout, esc, siteUrl } from './_notify.js';
 import { slug } from '../public/lib/seed.js';
-import { addPoint, parseFeed, matchFeedItem } from '../public/lib/dataops.js';
+import { addPoint, parseFeed, matchFeedItem, prepareFeed, todayIso as dayIso } from '../public/lib/dataops.js';
 import { summarize, clean, last, scoreProduct, seasonality, categorySeasonality } from '../public/lib/analytics.js';
 import { categoryById, CATEGORIES } from '../public/lib/categories.js';
 
@@ -151,20 +152,28 @@ async function games(existing) {
 }
 
 // Ceny prodejců z feedů – aktualizuje existující produkty v odvětví.
-async function feeds(settings, state) {
+// U odvětví s „nejnižší cenou“ (elektro, mobily, sport, kosmetika) se z dnešních cen prodejců
+// spočítá i hlavní cena produktu (lze vypnout u feedu volbou mainPrice: false).
+export const LOWEST_PRICE_CATEGORIES = new Set(['elektro', 'mobily', 'sport', 'kosmetika']);
+export async function feeds(settings, state, fetcher = (url) => safeFetch(url, { headers: { 'User-Agent': 'BuyWise/3 (+feed)' } })) {
   const errors = [];
   const touched = new Map();
+  const mainFor = new Set();
+  const perFeed = [];
   let matched = 0;
   for (const f of settings.feeds || []) {
     if (!f.url || !f.category || !f.competitor) continue;
     try {
-      const items = parseFeed(await fetchFeed(f.url));
+      const items = prepareFeed(parseFeed(await fetcher(f.url)));
       if (!items.length) throw new Error('feed neobsahuje žádné položky');
+      let n = 0;
       for (const p of state.values()) {
         if (p.category !== f.category || p.active === false) continue;
-        const hit = matchFeedItem(p, items);
+        const lastPrice = last(clean(p.prices))?.p || null;
+        const hit = matchFeedItem(p, items, lastPrice);
         if (!hit) continue;
         matched++;
+        n++;
         const cur = touched.get(p.id) || { ...p, competitors: [...(p.competitors || [])] };
         const i = cur.competitors.findIndex((c) => c.name.toLowerCase() === f.competitor.toLowerCase());
         const old = i >= 0 ? cur.competitors[i] : { name: f.competitor, url: '', prices: [] };
@@ -174,11 +183,23 @@ async function feeds(settings, state) {
         cur.updatedAt = now();
         touched.set(p.id, cur);
       }
+      perFeed.push(`${f.competitor} (${f.category}): ${n} z ${items.length}`);
+      if (f.mainPrice !== false && LOWEST_PRICE_CATEGORIES.has(f.category)) mainFor.add(f.category);
     } catch (e) {
       errors.push(`Feed ${f.competitor} (${f.category}): ${e.message}`);
     }
   }
-  return { products: [...touched.values()], errors, count: matched };
+  // Hlavní cena = nejnižší dnešní cena u prodejců z feedů.
+  const today = dayIso();
+  for (const p of touched.values()) {
+    if (!mainFor.has(p.category)) continue;
+    const todays = p.competitors.map((c) => (c.prices || []).find((x) => x.d === today)?.p).filter((x) => x > 0);
+    if (todays.length) {
+      p.prices = addPoint(p.prices || [], Math.min(...todays));
+      p.sample = false;
+    }
+  }
+  return { products: [...touched.values()], errors, count: matched, perFeed };
 }
 
 // ---------- Hlídače cen ----------
@@ -367,7 +388,7 @@ export async function runUpdate({ trigger = 'cron', weekly = false } = {}) {
     try {
       const r = await fn();
       put(r.products);
-      sources[key] = { ok: !r.errors.length, at: now(), msg: `${label}: ${r.count}${r.errors.length ? `, chyby: ${r.errors.length}` : ''}` };
+      sources[key] = { ok: !r.errors.length, at: now(), msg: `${label}: ${r.count}${r.errors.length ? `, chyby: ${r.errors.length}` : ''}${r.perFeed?.length ? ` (${r.perFeed.join('; ')})` : ''}` };
       log.push(sources[key].msg);
       errors.push(...r.errors);
     } catch (e) {

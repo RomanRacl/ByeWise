@@ -1,7 +1,7 @@
 // BuyWise – start aplikace, hlavička, drawery, vyhledávání, router s přechody.
 import {
   S, store, CATEGORIES, GROUPS, categoryById, catName, groupName, esc, link, catLink, productLink, navigate, currentPath, ICON, CURRENCIES, currency,
-  sum, priceText, savedScroll, saveScroll, fullProduct, productById,
+  sum, priceText, savedScroll, saveScroll, fullProduct, productById, safeHref,
 } from './js/core.js';
 import { t, lang, setLang } from './js/i18n.js';
 import { hideTip as hideChartTip } from './js/chart.js';
@@ -303,6 +303,8 @@ function renderBanner() {
       : `<strong>${t('Samostatná HTML verze s ukázkovými daty.')}</strong> ${t('Ceny a historie jsou vygenerované. Vlastní data přidáš v sekci Úpravy dat, živá data má verze na Vercelu.')}`
     : m === 'demo'
     ? `<strong>${t('Ukázková data.')}</strong> ${t('Ceny a historie jsou vygenerované pro náhled. Po připojení Firebase se zobrazí skutečná data.')}`
+    : m === 'db-error'
+    ? `<strong>${t('Databázi se nepodařilo načíst.')}</strong> ${t('Zobrazují se ukázková data. Správce: v Administraci uvidíš, které nastavení na Vercelu je špatně.')}`
     : m === 'empty'
     ? `<strong>${t('Databáze je zatím prázdná.')}</strong> ${t('V administraci klikni na „Naplnit výchozími daty“ a „Aktualizovat živá data“.')}`
     : '';
@@ -316,7 +318,7 @@ function renderBanner() {
       : '';
   const sp = S.data.settings?.sponsor;
   const spEl = document.getElementById('foot-sponsor');
-  if (spEl) spEl.innerHTML = sp?.text ? `${t('Partner:')} ${sp.url ? `<a href="${esc(sp.url)}" rel="sponsored noopener" target="_blank">${esc(sp.text)}</a>` : esc(sp.text)}` : '';
+  if (spEl) spEl.innerHTML = sp?.text ? `${t('Partner:')} ${safeHref(sp.url) ? `<a href="${esc(safeHref(sp.url))}" rel="sponsored noopener noreferrer" target="_blank">${esc(sp.text)}</a>` : esc(sp.text)}` : '';
   document.querySelectorAll('[data-t]').forEach((el) => (el.textContent = t(el.dataset.t)));
 }
 
@@ -498,6 +500,8 @@ function onOutside(e) {
   $main.innerHTML = `<section class="hero"><div class="hero-in"><div class="hero-main"><p class="hero-lead">${t('Načítám data…')}</p></div></div></section>`;
   if (!S.hash && location.hash.startsWith('#/')) history.replaceState(history.state, '', location.hash.slice(1));
   installClickHandler({ onLink, onOutside });
+  // Nenačtený náhled produktu se skryje (místo inline onerror, které by zakazovala Content-Security-Policy).
+  document.addEventListener('error', (e) => e.target?.matches?.('img.thumb, img.p-thumb') && e.target.remove(), true);
   installTooltips();
 
   const [data, config] = await Promise.all([loadData(), S.standalone ? null : loadConfig()]);

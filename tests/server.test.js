@@ -18,7 +18,7 @@ const days = (n) => Array.from({ length: n }, (_, i) => Math.floor((Date.now() -
 globalThis.fetch = async (url, opts = {}) => {
   const u = new URL(url);
   const json = (o, status = 200) => ({ ok: status < 400, status, json: async () => o, text: async () => JSON.stringify(o), headers: new Map() });
-  const text = (t) => ({ ok: true, status: 200, text: async () => t, json: async () => JSON.parse(t), headers: { get: () => null } });
+  const text = (t) => ({ ok: true, status: 200, text: async () => t, json: async () => JSON.parse(t), arrayBuffer: async () => new TextEncoder().encode(t).buffer, headers: { get: () => null } });
   if (u.hostname === 'www.cnb.cz') return text('28.10.2026 #209\nzemě|měna|množství|kód|kurz\nEMU|euro|1|EUR|24,350\nUSA|dolar|1|USD|21,100\n');
   if (u.hostname.endsWith('finance.yahoo.com')) {
     const sym = decodeURIComponent(u.pathname.split('/').pop());
@@ -58,7 +58,7 @@ globalThis.fetch = async (url, opts = {}) => {
     return json({});
   }
   if (u.hostname === 'feeds.test') return text('<SHOP><SHOPITEM><PRODUCTNAME>Apple iPhone 17 256 GB</PRODUCTNAME><PRICE_VAT>22 990</PRICE_VAT><URL>https://www.alza.cz/iphone</URL></SHOPITEM></SHOP>');
-  if (u.hostname === 'buywise.local') return text('<!doctype html><html><head><title>X</title>\n  <meta name="description" content="y" /></head><body></body></html>');
+  if (u.hostname === 'buywise.local' || u.hostname === 'buywise.test') return text('<!doctype html><html><head><title>X</title>\n  <meta name="description" content="y" /></head><body></body></html>');
   throw new Error('neočekávaný fetch ' + url);
 };
 
@@ -74,16 +74,29 @@ const mkRes = () => {
 const call = async (mod, { method = 'POST', headers = {}, body = {}, query = {}, url = '/' } = {}) => {
   const h = (await import(`${P}/api/${mod}.js`)).default;
   const res = mkRes();
+  if (method === 'POST' && !headers['content-type']) headers = { 'content-type': 'application/json', ...headers };
   await h({ method, headers, body, query, url }, res);
   return res;
 };
-const admin = (body) => call('admin', { headers: { 'x-admin-password': 'tajne-heslo' }, body });
+// Administrace: přihlášení heslem → HttpOnly cookie s relací, dál se posílá cookie + hlavička x-bw-admin.
+let adminCookie = '';
+const loginAdmin = async () => {
+  const r = await call('admin', { body: { action: 'login', password: 'tajne-heslo' } });
+  assert.equal(r.statusCode, 200, JSON.stringify(r.body));
+  assert.match(r.headers['Set-Cookie'], /HttpOnly; SameSite=Strict/);
+  adminCookie = r.headers['Set-Cookie'].split(';')[0];
+};
+const admin = (body) => call('admin', { headers: { cookie: adminCookie, 'x-bw-admin': '1' }, body });
+const sec = await import(`${P}/api/_security.js`);
+// Falešné DNS: veřejné adresy pro testovací servery, privátní pro „útočníka“.
+sec._setResolver(async (h) => (h === 'evil.test' ? ['10.0.0.5'] : h === 'rebind.test' ? ['127.0.0.1'] : ['93.184.216.34']));
 
 test('server: aktualizace, administrace, hlídače, API', { timeout: 120000 }, async () => {
 // 1) Cron bez klíče
 assert.equal((await call('cron', { headers: {} })).statusCode, 401);
 
 // 2) Výchozí data + první aktualizace
+await loginAdmin();
 let r = await admin({ action: 'seed' });
 assert.ok(r.body.added > 50, 'seed ' + JSON.stringify(r.body));
 yahooFail = new Set(['SB=F']);
@@ -116,7 +129,7 @@ assert.equal(r.body.saved, 2);
 r = await admin({ action: 'importRows', category: 'knihy', source: 'text', rows: [{ rank: 1, name: 'Nová kniha', subtitle: 'Autor', price: 399 }] });
 assert.equal(r.body.imported, 1);
 assert.equal(prod('knihy-onyxova-boure').active, false);
-r = await admin({ action: 'setSettings', settings: { inflation: { yoy: 2.4, label: 'září 2026' }, affiliates: [{ domain: 'alza.cz', template: '{url}?idp=1' }], requireApproval: true, feeds: [{ category: 'elektro', competitor: 'Alza', url: 'https://feeds.test/alza.xml' }], sponsor: { text: 'Partner', url: 'https://p.cz' } } });
+r = await admin({ action: 'setSettings', settings: { inflation: { yoy: 2.4, label: 'září 2026' }, affiliates: [{ domain: 'alza.cz', template: '{url}?idp=1' }], requireApproval: true, feeds: [{ category: 'elektro', competitor: 'Alza', url: 'https://feeds.test/alza.xml', mainPrice: false }], sponsor: { text: 'Partner', url: 'https://p.cz' } } });
 assert.equal(r.body.settings.requireApproval, true);
 r = await admin({ action: 'testFeed', category: 'elektro', url: 'https://feeds.test/alza.xml' });
 assert.equal(r.body.matched[0].price, 22990);
@@ -141,7 +154,8 @@ r = await call('user', { headers: bearer, body: { action: 'saveWishlist', wishli
 assert.equal(r.body.wishlist.length, 2, 'neplatná položka přání vyřazena');
 assert.equal(STORE.get('users/u1').wishAlerts, true, 'příznak pro e-maily seznamu přání');
 // Nahrání vlastní fotky do Storage
-const png = 'data:image/png;base64,' + Buffer.from('fakepng').toString('base64');
+const png = 'data:image/png;base64,' + Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('IHDR…')]).toString('base64');
+assert.equal((await admin({ action: 'uploadPhoto', dataUrl: 'data:image/png;base64,' + Buffer.from('<svg onload=alert(1)>').toString('base64') })).statusCode, 400, 'podvržený obrázek odmítnut');
 r = await admin({ action: 'uploadPhoto', dataUrl: png, name: 'Škoda Octavia' });
 assert.ok(r.body.url?.startsWith('https://firebasestorage.googleapis.com/v0/b/test-bucket/o/fotky%2Fskoda-octavia-') && r.body.url.includes('token='), JSON.stringify(r.body));
 assert.ok([...FILES.keys()].some((k) => k.startsWith('fotky/skoda-octavia-')), 'fotka uložena');

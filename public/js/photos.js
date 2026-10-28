@@ -277,8 +277,9 @@ function renderCredit(photo) {
   }
   el.hidden = false;
   const who = [photo.author, photo.license].filter(Boolean).join(', ');
-  el.innerHTML = photo.page
-    ? `<a href="${photo.page}" target="_blank" rel="noopener">Foto: ${escapeHtml(who)}, Wikimedia Commons</a>`
+  const page = /^https:\/\/commons\.wikimedia\.org\//.test(photo.page || '') ? photo.page : '';
+  el.innerHTML = page
+    ? `<a href="${escapeHtml(page)}" target="_blank" rel="noopener noreferrer">Foto: ${escapeHtml(who)}, Wikimedia Commons</a>`
     : `Foto: ${escapeHtml(who)}`;
 }
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -292,7 +293,8 @@ async function show(photo, token) {
   if (token !== stage.token) return false;
   const next = stage.layers[1 - stage.active];
   const cur = stage.layers[stage.active];
-  next.style.backgroundImage = `url("${photo.url.replace(/"/g, '%22')}")`;
+  if (!/^(https:\/\/|data:image\/(png|jpeg|webp);)/.test(photo.url)) return;
+  next.style.backgroundImage = `url("${photo.url.replace(/["\\\n\r]/g, encodeURIComponent)}")`;
   next.classList.remove('kb');
   void next.offsetWidth; // restart animace
   if (!reduce()) next.classList.add('kb');

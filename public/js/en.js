@@ -1,5 +1,7 @@
 // Anglický překlad. Klíč = český text v aplikaci. Chybějící položka se zobrazí česky.
 export const EN = {
+  "Databázi se nepodařilo načíst.": "The database could not be loaded.",
+  "Zobrazují se ukázková data. Správce: v Administraci uvidíš, které nastavení na Vercelu je špatně.": "Showing sample data. Admin: the Admin page shows which Vercel setting is wrong.",
   "1200 × 630 px – formát náhledů pro Facebook, X, LinkedIn i WhatsApp.": "1200 × 630 px – the preview format for Facebook, X, LinkedIn and WhatsApp.",
   "6 měsíců": "6 months",
   "Akce a sezóny": "Sales and seasons",

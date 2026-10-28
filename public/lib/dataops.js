@@ -168,68 +168,138 @@ export function parseRankingText(text) {
 }
 
 // ---------- XML/CSV feedy e-shopů ----------
+// Podporované formáty: Heureka/Zboží XML (SHOPITEM), Google Merchant (RSS item / Atom entry s g:…),
+// obecné XML affiliate sítí (<product> / <item> s name/price/url) a CSV/TSV s hlavičkou nebo bez ní.
+const ENT = { lt: '<', gt: '>', quot: '"', apos: "'", amp: '&', nbsp: ' ' };
 const decode = (s) =>
   String(s ?? '')
-    .replace(/^<!\[CDATA\[|\]\]>$/g, '')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&')
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(+d))
+    .replace(/&(lt|gt|quot|apos|nbsp|amp);/g, (_, e) => ENT[e])
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
+const esc = (n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const tag = (block, names) => {
   for (const n of names) {
-    const m = block.match(new RegExp(`<${n}[^>]*>([\\s\\S]*?)</${n}>`, 'i'));
-    if (m) return decode(m[1]);
+    const m = block.match(new RegExp(`<${esc(n)}(?:\\s[^>]*)?>([\\s\\S]*?)</${esc(n)}>`, 'i'));
+    if (m) {
+      const v = decode(m[1]);
+      if (v) return v;
+    }
   }
   return '';
 };
+const money = (v) => parseNum(String(v || '').replace(/\b[A-Z]{3}\b/g, ''));
+const MAX_ITEMS = 300000;
 
-// Podporuje Heureka XML (SHOPITEM), Google Merchant (item/entry s g:…) a CSV „název;cena;odkaz;ean“.
 export function parseFeed(text) {
   const items = [];
   const src = String(text);
-  if (/<SHOPITEM/i.test(src)) {
+  let format = 'csv';
+  const push = (it) => {
+    if (items.length < MAX_ITEMS && it.name && it.price > 0 && it.price < 1e9) items.push({ ...it, name: it.name.slice(0, 300), url: /^https?:\/\//i.test(it.url || '') ? it.url : '' });
+  };
+  if (/<SHOPITEM[\s>]/i.test(src)) {
+    format = 'heureka';
     for (const m of src.matchAll(/<SHOPITEM[\s>][\s\S]*?<\/SHOPITEM>/gi)) {
       const b = m[0];
-      const price = parseNum(tag(b, ['PRICE_VAT', 'PRICE']));
-      const name = tag(b, ['PRODUCTNAME', 'PRODUCT']);
-      if (name && price) items.push({ name, price, url: tag(b, ['URL']), ean: tag(b, ['EAN']) });
+      push({ name: tag(b, ['PRODUCTNAME', 'PRODUCT']), price: money(tag(b, ['PRICE_VAT', 'PRICE'])), url: tag(b, ['URL']), ean: tag(b, ['EAN']), brand: tag(b, ['MANUFACTURER']), group: tag(b, ['ITEMGROUP_ID']) });
     }
-  } else if (/<(item|entry)[\s>]/i.test(src)) {
+  } else if (/<(item|entry)[\s>]/i.test(src) && /g:|<price|<title/i.test(src)) {
+    format = 'google';
     for (const m of src.matchAll(/<(item|entry)[\s>][\s\S]*?<\/\1>/gi)) {
       const b = m[0];
-      const price = parseNum(tag(b, ['g:sale_price', 'g:price', 'price']).replace(/[A-Z]{3}/, ''));
-      const name = tag(b, ['g:title', 'title']);
-      if (name && price) items.push({ name, price, url: tag(b, ['g:link', 'link']), ean: tag(b, ['g:gtin', 'gtin']) });
+      if (/out[ _]of[ _]stock|discontinued/i.test(tag(b, ['g:availability', 'availability']))) continue;
+      push({ name: tag(b, ['g:title', 'title']), price: money(tag(b, ['g:sale_price', 'sale_price']) || tag(b, ['g:price', 'price'])), url: tag(b, ['g:link', 'link', 'g:canonical_link']), ean: tag(b, ['g:gtin', 'gtin']), brand: tag(b, ['g:brand', 'brand']), group: tag(b, ['g:item_group_id']) });
+    }
+  } else if (/<(product|PRODUCT|Product)[\s>]/.test(src)) {
+    format = 'xml';
+    for (const m of src.matchAll(/<(product)[\s>][\s\S]*?<\/\1>/gi)) {
+      const b = m[0];
+      push({
+        name: tag(b, ['name', 'productname', 'product_name', 'title']),
+        price: money(tag(b, ['price_vat', 'price_with_vat', 'sale_price', 'price'])),
+        url: tag(b, ['deeplink', 'tracking_url', 'url', 'link', 'product_url']),
+        ean: tag(b, ['ean', 'gtin', 'ean13']),
+        brand: tag(b, ['brand', 'manufacturer']),
+      });
     }
   } else {
-    for (const line of src.split(/\r?\n/)) {
-      const c = line.split(/[;\t]/).map((x) => x.trim().replace(/^"|"$/g, ''));
-      const price = parseNum(c[1]);
-      if (c[0] && price) items.push({ name: c[0], price, url: c[2] || '', ean: c[3] || '' });
+    const lines = src.split(/\r?\n/).filter((l) => l.trim());
+    const sep = (lines[0] || '').includes('\t') ? '\t' : (lines[0] || '').split(';').length >= (lines[0] || '').split(',').length ? ';' : ',';
+    const split = (l) => l.split(sep).map((x) => x.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
+    const head = split(lines[0] || '').map((h) => h.toLowerCase());
+    const col = (names) => head.findIndex((h) => names.includes(h));
+    const hasHead = col(['name', 'název', 'nazev', 'title', 'product', 'productname']) >= 0 && col(['price', 'cena', 'price_vat']) >= 0;
+    const ix = hasHead
+      ? { name: col(['name', 'název', 'nazev', 'title', 'product', 'productname']), price: col(['price_vat', 'price', 'cena']), url: col(['url', 'link', 'odkaz', 'deeplink']), ean: col(['ean', 'gtin']) }
+      : { name: 0, price: 1, url: 2, ean: 3 };
+    for (const line of lines.slice(hasHead ? 1 : 0)) {
+      const c = split(line);
+      push({ name: c[ix.name] || '', price: parseNum(c[ix.price]), url: ix.url >= 0 ? c[ix.url] || '' : '', ean: ix.ean >= 0 ? c[ix.ean] || '' : '' });
     }
+  }
+  items.format = format;
+  return items;
+}
+
+// Tokeny pro párování: bez diakritiky, čísla oddělená od jednotek („256GB“ → 256 gb, „100ml“ → 100 ml).
+const tokens = (s) =>
+  slug(String(s).replace(/(\d)([a-z])/gi, '$1 $2').replace(/([a-z])(\d)/gi, (m, a, d) => (/[a-z]/i.test(a) && /^(e|s)$/i.test(a) ? m : `${a} ${d}`)))
+    .split('-')
+    .filter(Boolean);
+// Slova příslušenství: když jsou v položce feedu a ne v názvu produktu, nejde o produkt samotný.
+const ACCESSORY = new Set(['kryt', 'obal', 'pouzdro', 'flip', 'ochranne', 'ochranny', 'sklo', 'folie', 'nabijecka', 'nabijeci', 'kabel', 'adapter', 'drzak', 'reminek', 'remen', 'naramek', 'nahradni', 'tester', 'vzorek', 'miniatura', 'naplne', 'naplni', 'filtr', 'filtry', 'sacky', 'kartac', 'hlavice', 'stojan', 'podlozka', 'taska', 'batoh', 'brasna', 'skin', 'case', 'cover', 'tempered', 'protector', 'charger', 'cable', 'strap', 'refill', 'set', 'sada', 'darkova', 'repasovany', 'repasovana', 'rozbaleno', 'pouzite', 'bazar']);
+// Označení variant modelu: „iPhone 17“ nesmí spárovat „iPhone 17 Pro“.
+const VARIANT = new Set(['pro', 'max', 'plus', 'ultra', 'mini', 'lite', 'fe', 'neo', 'edge', 'air', 'prime', 'xl', 'xxl']);
+
+// Předzpracuje položky feedu (tokeny jen jednou – feed může mít desítky tisíc položek).
+export function prepareFeed(items) {
+  if (!items._prepared) {
+    for (const it of items) it._tok = new Set(tokens(it.name));
+    items._prepared = true;
   }
   return items;
 }
 
-const tokens = (s) => slug(s).split('-').filter((t) => t.length > 0);
-
-// Najde položku feedu odpovídající produktu (EAN, jinak shoda slov včetně všech čísel z názvu).
-export function matchFeedItem(product, items) {
+/**
+ * Najde položku feedu pro produkt: nejdřív podle EAN, jinak shodou slov.
+ * Musí sedět všechna slova z názvu a všechna čísla z názvu i podtitulu (např. 256 GB, 100 ml),
+ * položka nesmí být příslušenství ani jiná varianta modelu a cena musí dávat smysl.
+ */
+export function matchFeedItem(product, items, lastPrice = null) {
+  prepareFeed(items);
+  const sane = (it) => !lastPrice || (it.price >= lastPrice * 0.45 && it.price <= lastPrice * 2.2);
   const ean = product.attrs?.ean;
   if (ean) {
-    const hit = items.filter((i) => i.ean && i.ean === ean);
-    if (hit.length) return hit.reduce((a, b) => (b.price < a.price ? b : a));
+    const hit = items.filter((i) => i.ean && i.ean.replace(/\D/g, '') === String(ean).replace(/\D/g, '') && sane(i));
+    if (hit.length) return { ...hit.reduce((a, b) => (b.price < a.price ? b : a)), byEan: true };
   }
-  const want = tokens(`${product.name} ${product.subtitle || ''}`);
   const nameTok = tokens(product.name);
+  const want = [...new Set([...nameTok, ...tokens(product.subtitle || '')])];
+  const mine = new Set(want);
   const nums = want.filter((t) => /\d/.test(t));
   let best = null;
   for (const it of items) {
-    const have = new Set(tokens(it.name));
+    const have = it._tok;
+    if (!nameTok.every((t) => have.has(t))) continue;
     if (!nums.every((n) => have.has(n))) continue;
-    const coverName = nameTok.filter((t) => have.has(t)).length / nameTok.length;
-    if (coverName < 1) continue;
+    let bad = false;
+    for (const t of have) {
+      if ((ACCESSORY.has(t) || VARIANT.has(t)) && !mine.has(t)) {
+        bad = true;
+        break;
+      }
+    }
+    if (bad || !sane(it)) continue;
     const cover = want.filter((t) => have.has(t)).length / want.length;
-    if (cover < 0.7) continue;
-    if (!best || cover > best.cover || (cover === best.cover && it.price < best.item.price)) best = { item: it, cover };
+    if (cover < 0.6) continue;
+    // Méně slov navíc = přesnější shoda; při shodě levnější nabídka.
+    const extra = have.size - want.filter((t) => have.has(t)).length;
+    const score = cover * 10 - extra * 0.2;
+    if (!best || score > best.score || (score === best.score && it.price < best.item.price)) best = { item: it, score };
   }
   return best ? best.item : null;
 }

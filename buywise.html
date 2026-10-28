@@ -687,7 +687,7 @@ pre.log { background: var(--sunken); border-radius: 8px; padding: 10px; font-siz
 .comp-row { display: grid; grid-template-columns: 1fr 120px 1fr 32px; gap: 8px; margin-top: 8px; }
 .comp-row input, .feed-row input, .feed-row select, .bulk input { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; min-width: 0; }
 @media (max-width: 620px) { .comp-row { grid-template-columns: 1fr 100px 32px; } .comp-row .u { display: none; } }
-.feed-row { display: grid; grid-template-columns: 150px 150px 1fr auto 32px; gap: 8px; margin-top: 8px; }
+.feed-row { display: grid; grid-template-columns: 140px 140px 1fr auto auto 32px; gap: 8px; margin-top: 8px; align-items: center; }
 @media (max-width: 760px) { .feed-row { grid-template-columns: 1fr 1fr; } .feed-row input[data-f='url'] { grid-column: 1 / -1; } }
 .bulk input { width: 100%; }
 details.more { margin-top: 12px; }
@@ -985,6 +985,11 @@ html[data-vt='back']::view-transition-new(root) { animation-name: vt-in-back; }
   .pulse dd { font-size: 36px; }
   .pulse dd.sm { font-size: 19px; line-height: 1.5; }
 }
+.feed-presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin: 10px 0; }
+.feed-preset { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 12px; background: var(--paper); }
+.feed-preset .btn { align-self: flex-start; padding: 5px 12px; }
+.feed-row .toggle { white-space: nowrap; }
+.feed-row input[type=checkbox] { padding: 0; min-width: 16px; }
 
 </style>
 </head>
@@ -2507,68 +2512,138 @@ function parseRankingText(text) {
 }
 
 // ---------- XML/CSV feedy e-shopů ----------
+// Podporované formáty: Heureka/Zboží XML (SHOPITEM), Google Merchant (RSS item / Atom entry s g:…),
+// obecné XML affiliate sítí (<product> / <item> s name/price/url) a CSV/TSV s hlavičkou nebo bez ní.
+const ENT = { lt: '<', gt: '>', quot: '"', apos: "'", amp: '&', nbsp: ' ' };
 const decode = (s) =>
   String(s ?? '')
-    .replace(/^<!\[CDATA\[|\]\]>$/g, '')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&')
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(+d))
+    .replace(/&(lt|gt|quot|apos|nbsp|amp);/g, (_, e) => ENT[e])
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
+const esc = (n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const tag = (block, names) => {
   for (const n of names) {
-    const m = block.match(new RegExp(`<${n}[^>]*>([\\s\\S]*?)</${n}>`, 'i'));
-    if (m) return decode(m[1]);
+    const m = block.match(new RegExp(`<${esc(n)}(?:\\s[^>]*)?>([\\s\\S]*?)</${esc(n)}>`, 'i'));
+    if (m) {
+      const v = decode(m[1]);
+      if (v) return v;
+    }
   }
   return '';
 };
+const money = (v) => parseNum(String(v || '').replace(/\b[A-Z]{3}\b/g, ''));
+const MAX_ITEMS = 300000;
 
-// Podporuje Heureka XML (SHOPITEM), Google Merchant (item/entry s g:…) a CSV „název;cena;odkaz;ean“.
 function parseFeed(text) {
   const items = [];
   const src = String(text);
-  if (/<SHOPITEM/i.test(src)) {
+  let format = 'csv';
+  const push = (it) => {
+    if (items.length < MAX_ITEMS && it.name && it.price > 0 && it.price < 1e9) items.push({ ...it, name: it.name.slice(0, 300), url: /^https?:\/\//i.test(it.url || '') ? it.url : '' });
+  };
+  if (/<SHOPITEM[\s>]/i.test(src)) {
+    format = 'heureka';
     for (const m of src.matchAll(/<SHOPITEM[\s>][\s\S]*?<\/SHOPITEM>/gi)) {
       const b = m[0];
-      const price = parseNum(tag(b, ['PRICE_VAT', 'PRICE']));
-      const name = tag(b, ['PRODUCTNAME', 'PRODUCT']);
-      if (name && price) items.push({ name, price, url: tag(b, ['URL']), ean: tag(b, ['EAN']) });
+      push({ name: tag(b, ['PRODUCTNAME', 'PRODUCT']), price: money(tag(b, ['PRICE_VAT', 'PRICE'])), url: tag(b, ['URL']), ean: tag(b, ['EAN']), brand: tag(b, ['MANUFACTURER']), group: tag(b, ['ITEMGROUP_ID']) });
     }
-  } else if (/<(item|entry)[\s>]/i.test(src)) {
+  } else if (/<(item|entry)[\s>]/i.test(src) && /g:|<price|<title/i.test(src)) {
+    format = 'google';
     for (const m of src.matchAll(/<(item|entry)[\s>][\s\S]*?<\/\1>/gi)) {
       const b = m[0];
-      const price = parseNum(tag(b, ['g:sale_price', 'g:price', 'price']).replace(/[A-Z]{3}/, ''));
-      const name = tag(b, ['g:title', 'title']);
-      if (name && price) items.push({ name, price, url: tag(b, ['g:link', 'link']), ean: tag(b, ['g:gtin', 'gtin']) });
+      if (/out[ _]of[ _]stock|discontinued/i.test(tag(b, ['g:availability', 'availability']))) continue;
+      push({ name: tag(b, ['g:title', 'title']), price: money(tag(b, ['g:sale_price', 'sale_price']) || tag(b, ['g:price', 'price'])), url: tag(b, ['g:link', 'link', 'g:canonical_link']), ean: tag(b, ['g:gtin', 'gtin']), brand: tag(b, ['g:brand', 'brand']), group: tag(b, ['g:item_group_id']) });
+    }
+  } else if (/<(product|PRODUCT|Product)[\s>]/.test(src)) {
+    format = 'xml';
+    for (const m of src.matchAll(/<(product)[\s>][\s\S]*?<\/\1>/gi)) {
+      const b = m[0];
+      push({
+        name: tag(b, ['name', 'productname', 'product_name', 'title']),
+        price: money(tag(b, ['price_vat', 'price_with_vat', 'sale_price', 'price'])),
+        url: tag(b, ['deeplink', 'tracking_url', 'url', 'link', 'product_url']),
+        ean: tag(b, ['ean', 'gtin', 'ean13']),
+        brand: tag(b, ['brand', 'manufacturer']),
+      });
     }
   } else {
-    for (const line of src.split(/\r?\n/)) {
-      const c = line.split(/[;\t]/).map((x) => x.trim().replace(/^"|"$/g, ''));
-      const price = parseNum(c[1]);
-      if (c[0] && price) items.push({ name: c[0], price, url: c[2] || '', ean: c[3] || '' });
+    const lines = src.split(/\r?\n/).filter((l) => l.trim());
+    const sep = (lines[0] || '').includes('\t') ? '\t' : (lines[0] || '').split(';').length >= (lines[0] || '').split(',').length ? ';' : ',';
+    const split = (l) => l.split(sep).map((x) => x.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
+    const head = split(lines[0] || '').map((h) => h.toLowerCase());
+    const col = (names) => head.findIndex((h) => names.includes(h));
+    const hasHead = col(['name', 'název', 'nazev', 'title', 'product', 'productname']) >= 0 && col(['price', 'cena', 'price_vat']) >= 0;
+    const ix = hasHead
+      ? { name: col(['name', 'název', 'nazev', 'title', 'product', 'productname']), price: col(['price_vat', 'price', 'cena']), url: col(['url', 'link', 'odkaz', 'deeplink']), ean: col(['ean', 'gtin']) }
+      : { name: 0, price: 1, url: 2, ean: 3 };
+    for (const line of lines.slice(hasHead ? 1 : 0)) {
+      const c = split(line);
+      push({ name: c[ix.name] || '', price: parseNum(c[ix.price]), url: ix.url >= 0 ? c[ix.url] || '' : '', ean: ix.ean >= 0 ? c[ix.ean] || '' : '' });
     }
+  }
+  items.format = format;
+  return items;
+}
+
+// Tokeny pro párování: bez diakritiky, čísla oddělená od jednotek („256GB“ → 256 gb, „100ml“ → 100 ml).
+const tokens = (s) =>
+  slug(String(s).replace(/(\d)([a-z])/gi, '$1 $2').replace(/([a-z])(\d)/gi, (m, a, d) => (/[a-z]/i.test(a) && /^(e|s)$/i.test(a) ? m : `${a} ${d}`)))
+    .split('-')
+    .filter(Boolean);
+// Slova příslušenství: když jsou v položce feedu a ne v názvu produktu, nejde o produkt samotný.
+const ACCESSORY = new Set(['kryt', 'obal', 'pouzdro', 'flip', 'ochranne', 'ochranny', 'sklo', 'folie', 'nabijecka', 'nabijeci', 'kabel', 'adapter', 'drzak', 'reminek', 'remen', 'naramek', 'nahradni', 'tester', 'vzorek', 'miniatura', 'naplne', 'naplni', 'filtr', 'filtry', 'sacky', 'kartac', 'hlavice', 'stojan', 'podlozka', 'taska', 'batoh', 'brasna', 'skin', 'case', 'cover', 'tempered', 'protector', 'charger', 'cable', 'strap', 'refill', 'set', 'sada', 'darkova', 'repasovany', 'repasovana', 'rozbaleno', 'pouzite', 'bazar']);
+// Označení variant modelu: „iPhone 17“ nesmí spárovat „iPhone 17 Pro“.
+const VARIANT = new Set(['pro', 'max', 'plus', 'ultra', 'mini', 'lite', 'fe', 'neo', 'edge', 'air', 'prime', 'xl', 'xxl']);
+
+// Předzpracuje položky feedu (tokeny jen jednou – feed může mít desítky tisíc položek).
+function prepareFeed(items) {
+  if (!items._prepared) {
+    for (const it of items) it._tok = new Set(tokens(it.name));
+    items._prepared = true;
   }
   return items;
 }
 
-const tokens = (s) => slug(s).split('-').filter((t) => t.length > 0);
-
-// Najde položku feedu odpovídající produktu (EAN, jinak shoda slov včetně všech čísel z názvu).
-function matchFeedItem(product, items) {
+/**
+ * Najde položku feedu pro produkt: nejdřív podle EAN, jinak shodou slov.
+ * Musí sedět všechna slova z názvu a všechna čísla z názvu i podtitulu (např. 256 GB, 100 ml),
+ * položka nesmí být příslušenství ani jiná varianta modelu a cena musí dávat smysl.
+ */
+function matchFeedItem(product, items, lastPrice = null) {
+  prepareFeed(items);
+  const sane = (it) => !lastPrice || (it.price >= lastPrice * 0.45 && it.price <= lastPrice * 2.2);
   const ean = product.attrs?.ean;
   if (ean) {
-    const hit = items.filter((i) => i.ean && i.ean === ean);
-    if (hit.length) return hit.reduce((a, b) => (b.price < a.price ? b : a));
+    const hit = items.filter((i) => i.ean && i.ean.replace(/\D/g, '') === String(ean).replace(/\D/g, '') && sane(i));
+    if (hit.length) return { ...hit.reduce((a, b) => (b.price < a.price ? b : a)), byEan: true };
   }
-  const want = tokens(`${product.name} ${product.subtitle || ''}`);
   const nameTok = tokens(product.name);
+  const want = [...new Set([...nameTok, ...tokens(product.subtitle || '')])];
+  const mine = new Set(want);
   const nums = want.filter((t) => /\d/.test(t));
   let best = null;
   for (const it of items) {
-    const have = new Set(tokens(it.name));
+    const have = it._tok;
+    if (!nameTok.every((t) => have.has(t))) continue;
     if (!nums.every((n) => have.has(n))) continue;
-    const coverName = nameTok.filter((t) => have.has(t)).length / nameTok.length;
-    if (coverName < 1) continue;
+    let bad = false;
+    for (const t of have) {
+      if ((ACCESSORY.has(t) || VARIANT.has(t)) && !mine.has(t)) {
+        bad = true;
+        break;
+      }
+    }
+    if (bad || !sane(it)) continue;
     const cover = want.filter((t) => have.has(t)).length / want.length;
-    if (cover < 0.7) continue;
-    if (!best || cover > best.cover || (cover === best.cover && it.price < best.item.price)) best = { item: it, cover };
+    if (cover < 0.6) continue;
+    // Méně slov navíc = přesnější shoda; při shodě levnější nabídka.
+    const extra = have.size - want.filter((t) => have.has(t)).length;
+    const score = cover * 10 - extra * 0.2;
+    if (!best || score > best.score || (score === best.score && it.price < best.item.price)) best = { item: it, score };
   }
   return best ? best.item : null;
 }
@@ -2596,13 +2671,15 @@ function parseAffiliateRules(text) {
     .map(([domain, template]) => ({ domain: domain.replace(/^www\./, ''), template }));
 }
 
-return { todayIso, parseNum, addPoint, merge, applyImport, parseCsv, parseSda, parseRankingText, parseFeed, matchFeedItem, affiliate, parseAffiliateRules };
+return { todayIso, parseNum, addPoint, merge, applyImport, parseCsv, parseSda, parseRankingText, parseFeed, prepareFeed, matchFeedItem, affiliate, parseAffiliateRules };
 })();
 
 // ----- js/en.js -----
 const __js_en_js = (() => {
 // Anglický překlad. Klíč = český text v aplikaci. Chybějící položka se zobrazí česky.
 const EN = {
+  "Databázi se nepodařilo načíst.": "The database could not be loaded.",
+  "Zobrazují se ukázková data. Správce: v Administraci uvidíš, které nastavení na Vercelu je špatně.": "Showing sample data. Admin: the Admin page shows which Vercel setting is wrong.",
   "1200 × 630 px – formát náhledů pro Facebook, X, LinkedIn i WhatsApp.": "1200 × 630 px – the preview format for Facebook, X, LinkedIn and WhatsApp.",
   "6 měsíců": "6 months",
   "Akce a sezóny": "Sales and seasons",
@@ -3449,7 +3526,16 @@ function priceText(p, s) {
   return money(s.price, p.unit);
 }
 
-const affiliateUrl = (url) => affiliate(url, S.data?.settings?.affiliates || []);
+// Bezpečný odkaz: jen http(s). Odkazy pocházejí i z cizích feedů e-shopů, takže „javascript:…“ se nesmí dostat do href.
+function safeHref(u) {
+  try {
+    const url = new URL(String(u || ''), location.href);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+const affiliateUrl = (url) => safeHref(affiliate(safeHref(url), S.data?.settings?.affiliates || []));
 
 // ---------- Odkazy a navigace ----------
 const link = (path) => (S.hash ? '#' + path : path);
@@ -3629,7 +3715,7 @@ function scoreWhen(sc, unit = 'Kč') {
   return sc.tone === 'wait' ? t('Počkej na lepší cenu') : t('Na načasování moc nezáleží');
 }
 
-return { CATEGORIES, GROUPS, categoryById, S, store, esc, nf, decimals, compact, CURRENCIES, currency, rates, conv, money, unitOf, pct, pctClass, dateFmt, monthName, catName, catNote, catPriceLabel, catDemandLabel, groupName, sum, insight, productById, byCat, allRanked, fullProduct, analysis, priceText, affiliateUrl, link, productLink, catLink, saveScroll, savedScroll, navigate, setQuery, currentPath, ARROW, chip, rankMove, ICON, toast, downloadFile, toCsv, slugFile, hero, sheet, scoreBadge, scoreWhen };
+return { CATEGORIES, GROUPS, categoryById, S, store, esc, nf, decimals, compact, CURRENCIES, currency, rates, conv, money, unitOf, pct, pctClass, dateFmt, monthName, catName, catNote, catPriceLabel, catDemandLabel, groupName, sum, insight, productById, byCat, allRanked, fullProduct, analysis, priceText, safeHref, affiliateUrl, link, productLink, catLink, saveScroll, savedScroll, navigate, setQuery, currentPath, ARROW, chip, rankMove, ICON, toast, downloadFile, toCsv, slugFile, hero, sheet, scoreBadge, scoreWhen };
 })();
 
 // ----- js/chart.js -----
@@ -4945,8 +5031,9 @@ function renderCredit(photo) {
   }
   el.hidden = false;
   const who = [photo.author, photo.license].filter(Boolean).join(', ');
-  el.innerHTML = photo.page
-    ? `<a href="${photo.page}" target="_blank" rel="noopener">Foto: ${escapeHtml(who)}, Wikimedia Commons</a>`
+  const page = /^https:\/\/commons\.wikimedia\.org\//.test(photo.page || '') ? photo.page : '';
+  el.innerHTML = page
+    ? `<a href="${escapeHtml(page)}" target="_blank" rel="noopener noreferrer">Foto: ${escapeHtml(who)}, Wikimedia Commons</a>`
     : `Foto: ${escapeHtml(who)}`;
 }
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -4960,7 +5047,8 @@ async function show(photo, token) {
   if (token !== stage.token) return false;
   const next = stage.layers[1 - stage.active];
   const cur = stage.layers[stage.active];
-  next.style.backgroundImage = `url("${photo.url.replace(/"/g, '%22')}")`;
+  if (!/^(https:\/\/|data:image\/(png|jpeg|webp);)/.test(photo.url)) return;
+  next.style.backgroundImage = `url("${photo.url.replace(/["\\\n\r]/g, encodeURIComponent)}")`;
   next.classList.remove('kb');
   void next.offsetWidth; // restart animace
   if (!reduce()) next.classList.add('kb');
@@ -5703,7 +5791,7 @@ async function renderProduct(main, id) {
     title: `${esc(p.name)}${p.sample ? `<span class="sample">${t('ukázka')}</span>` : ''}`,
     titleAttrs: 'style="view-transition-name: pm-title"',
     lead: [p.subtitle ? esc(p.subtitle) : '', p.demand ? `${esc(catDemandLabel(c))}: ${esc(p.demand)}` : ''].filter(Boolean).join('<br>'),
-    below: `<div class="hero-meta">${p.rank ? `<span class="rank-pill">${t('{n}. místo v odvětví {c}', { n: p.rank, c: esc(catName(c)) })}</span>` : `<span class="rank-pill">${t('Mimo aktuální žebříček')}</span>`}${p.image ? `<img class="p-thumb" src="${esc(p.image)}" alt="" onerror="this.remove()">` : ''}</div>
+    below: `<div class="hero-meta">${p.rank ? `<span class="rank-pill">${t('{n}. místo v odvětví {c}', { n: p.rank, c: esc(catName(c)) })}</span>` : `<span class="rank-pill">${t('Mimo aktuální žebříček')}</span>`}${p.image ? `<img class="p-thumb" src="${esc(p.image)}" alt="">` : ''}</div>
       <div class="actions">
         <button type="button" class="btn glass ${fav ? 'on' : ''}" data-action="p-fav" aria-pressed="${fav}">${ICON.star}<span>${fav ? t('V oblíbených') : t('Do oblíbených')}</span></button>
         <button type="button" class="btn glass" data-action="p-cmp" aria-pressed="${inCmp}">${ICON.compare}<span>${inCmp ? t('V porovnání') : t('Porovnat')}</span></button>
@@ -5811,7 +5899,7 @@ async function renderProduct(main, id) {
               const ci = compRows.indexOf(r);
               const diff = ((r.price - comp.cheapestNow.price) / comp.cheapestNow.price) * 100;
               return `<tr class="${r === comp.cheapestNow ? 'best' : ''}">
-                <td>${ci >= 0 ? `<span class="dot" style="background:${COLORS[ci]}"></span>` : ''}${r.url ? `<a href="${esc(affiliateUrl(r.url))}" target="_blank" rel="noopener sponsored">${esc(r.name)}</a>` : esc(r.name)}</td>
+                <td>${ci >= 0 ? `<span class="dot" style="background:${COLORS[ci]}"></span>` : ''}${affiliateUrl(r.url) ? `<a href="${esc(affiliateUrl(r.url))}" target="_blank" rel="noopener noreferrer sponsored">${esc(r.name)}</a>` : esc(r.name)}</td>
                 <td class="num"><strong>${money(r.price, u)}</strong></td>
                 <td class="num ${diff > 0.05 ? 'chg-up' : ''}">${diff > 0.05 ? '+' + pct(diff, false) : t('nejlevnější')}</td>
                 <td>${chip(r.trend)}</td>
@@ -5926,7 +6014,7 @@ async function renderProduct(main, id) {
     heroHtml +
     sheet(`${scorePanel}${verdict}${discountBlock}${chartCard}${savings}${figures}
       <div class="acc-list section">${sections.join('')}</div>
-      <p class="note src">${t('Zdroj:')} ${esc((p.source || catNote(c)).replace(/\.$/, ''))}${p.link ? `. <a href="${esc(affiliateUrl(p.link))}" target="_blank" rel="noopener sponsored">${t('Otevřít u prodejce')}</a>` : ''}. ${t('Naposledy upraveno {d}.', { d: p.updatedAt ? dateFmt(p.updatedAt.slice(0, 10)) : '—' })}</p>`);
+      <p class="note src">${t('Zdroj:')} ${esc((p.source || catNote(c)).replace(/\.$/, ''))}${affiliateUrl(p.link) ? `. <a href="${esc(affiliateUrl(p.link))}" target="_blank" rel="noopener noreferrer sponsored">${t('Otevřít u prodejce')}</a>` : ''}. ${t('Naposledy upraveno {d}.', { d: p.updatedAt ? dateFmt(p.updatedAt.slice(0, 10)) : '—' })}</p>`);
 
   // ---------- Kreslení ----------
   const toPts = (arr) => arr.map((x) => ({ t: T(x.d), v: conv(x.p, u).v }));
@@ -6296,7 +6384,7 @@ function renderCategory(main, id, query = new URLSearchParams()) {
     const selected = p.id === st.sel;
     return `<li data-pid="${esc(p.id)}" role="option" aria-selected="${selected}" tabindex="${selected || (!st.sel && i === 0) ? 0 : -1}" data-action="c-select" style="--i:${i}">
       <span class="tagcell"><span class="tag">${p.rank}</span>${rankMove(p)}</span>
-      <span class="who">${p.image ? `<img class="thumb" src="${esc(p.image)}" alt="" loading="lazy" onerror="this.remove()">` : ''}<span><a class="nm" href="${productLink(p.id)}" data-prefetch="${esc(p.id)}" tabindex="-1">${esc(p.name)}</a>${p.sample ? `<span class="sample">${t('ukázka')}</span>` : ''}${p.discount ? `<span class="sale">−${p.discount} %</span>` : ''}<span class="sub">${esc(p.subtitle || '')}</span><span class="dem">${esc(p.demand || '')}</span></span></span>
+      <span class="who">${p.image ? `<img class="thumb" src="${esc(p.image)}" alt="" loading="lazy">` : ''}<span><a class="nm" href="${productLink(p.id)}" data-prefetch="${esc(p.id)}" tabindex="-1">${esc(p.name)}</a>${p.sample ? `<span class="sample">${t('ukázka')}</span>` : ''}${p.discount ? `<span class="sale">−${p.discount} %</span>` : ''}<span class="sub">${esc(p.subtitle || '')}</span><span class="dem">${esc(p.demand || '')}</span></span></span>
       <span class="spark">${sparkline(s.history, s.trend.dir)}</span>
       <span class="price">${priceText(p, s)}<small>${esc(catPriceLabel(c))}</small></span>
       <span class="ch">${chip(s.trend)}<span class="small ${pctClass(s.ch30)}">${s.ch30 == null ? '' : pct(s.ch30) + ' / 30 d'}</span></span>
@@ -6919,7 +7007,9 @@ const { categoryById } = __lib_categories_js;
 const { demoProducts, seedProducts } = __lib_seed_js;
 const { merge, parseCsv, applyImport } = __lib_dataops_js;
 
-const adminAuth = { pw: 'local', useGoogle: false };
+const adminAuth = { session: true, useGoogle: false };
+const adminLogin = async () => {};
+const adminLogout = async () => {};
 const adminLocal = true;
 
 function persistLocal(note) {
@@ -7015,7 +7105,7 @@ async function adminApi(action, payload = {}) {
   }
 }
 
-return { loadLocalData, adminAuth, adminLocal, adminApi };
+return { loadLocalData, adminAuth, adminLogin, adminLogout, adminLocal, adminApi };
 })();
 
 // ----- js/views/admin.js -----
@@ -7024,7 +7114,7 @@ const __js_views_admin_js = (() => {
 const { S, CATEGORIES, categoryById, esc, money, dateFmt, link, toast, downloadFile, store } = __js_core_js;
 const { clean } = __lib_analytics_js;
 const { parseCsv, parseRankingText, parseSda, parseAffiliateRules } = __lib_dataops_js;
-const { adminApi, adminAuth, adminLocal } = __js_local_api_js;
+const { adminApi, adminAuth, adminLocal, adminLogin, adminLogout } = __js_local_api_js;
 const { login, authAvailable } = __js_user_js;
 const { actions } = __js_ui_js;
 const { hero, sheet } = __js_core_js;
@@ -7092,23 +7182,43 @@ async function uploadPhoto(file, name) {
 }
 const uploadField = (target, label = 'Nahrát fotku') => `<label class="btn alt upload"><input type="file" accept="image/*" data-upload="${target}" hidden>${label}</label>`;
 
+// Typičtí prodejci pro nová odvětví (feed od nich získáš přes affiliate síť nebo přímo od e-shopu).
+const FEED_HINTS = {
+  mobily: { shops: ['Alza', 'Datart', 'CZC', 'Mobil Pohotovost', 'iStyle'] },
+  sport: { shops: ['Sportisimo', 'Top4Running', 'Hervis', 'Insportline', 'Alza'] },
+  kosmetika: { shops: ['Notino', 'Douglas', 'Dr.Max', 'Benu', 'Alza'] },
+  elektro: { shops: ['Alza', 'Datart', 'CZC', 'Planeo', 'Mall'] },
+};
+
+// Diagnostika nastavení Vercel ↔ Firebase (hodnoty se nezobrazují, jen jestli jsou v pořádku).
+function diagnostics(h) {
+  const rows = Object.entries(h.config)
+    .map(([k, v]) => `<tr><td><code>${esc(k)}</code></td><td class="${v === 'ok' || v.startsWith('ok') ? 'chg-down' : v.startsWith('nevyplněno') ? 'muted' : 'chg-up'}">${esc(v)}</td></tr>`)
+    .join('');
+  return `<div class="notice warn diag"><p><strong>Server se nemůže připojit k databázi.</strong> ${esc(h.firestore)}</p>
+    <table class="cmp"><tbody>${rows}</tbody></table>
+    <p class="small">Proměnné opravíš na Vercelu: projekt → <b>Settings → Environment Variables</b>. Pak <b>Deployments → ⋯ → Redeploy</b> (změny se projeví až po novém nasazení). Do té doby web ukazuje ukázková data.</p></div>`;
+}
+
 const catOptions = (sel) => CATEGORIES.map((c) => `<option value="${c.id}" ${c.id === sel ? 'selected' : ''}>${esc(c.name)}${c.source === 'auto' ? ' (automaticky)' : ''}</option>`).join('');
 
 async function renderAdmin(main) {
   document.title = 'Administrace – BuyWise';
-  if (!adminLocal && !adminAuth.pw && !(adminAuth.useGoogle && S.user)) {
+  if (!adminLocal && !adminAuth.session && !(adminAuth.useGoogle && S.user)) {
     main.innerHTML = hero({ title: 'Administrace', lead: 'Správa produktů, cen, importů a nastavení.' }) + sheet(`<div class="admin">
       <form class="card" id="login"><label class="field">Heslo administrátora<input type="password" id="pw" autocomplete="current-password"></label>
       <div class="btns"><button class="btn" type="submit">Přihlásit</button>${authAvailable() ? `<button class="btn alt" type="button" data-action="adm-glogin">Přihlásit přes Google (správci)</button>` : ''}</div><p class="msg" id="lmsg"></p></form></div>`);
     main.querySelector('#login').addEventListener('submit', async (e) => {
       e.preventDefault();
-      adminAuth.pw = main.querySelector('#pw').value;
+      const btn = e.target.querySelector('[type=submit]');
+      btn.disabled = true;
       try {
-        await adminApi('status');
+        await adminLogin(main.querySelector('#pw').value);
         renderAdmin(main);
       } catch (err) {
-        adminAuth.pw = '';
         msg(main.querySelector('#lmsg'), err.message);
+      } finally {
+        btn.disabled = false;
       }
     });
     actions({ 'adm-glogin': async () => {
@@ -7137,9 +7247,8 @@ async function renderAdmin(main) {
     <nav class="seg admin-tabs" role="tablist">${tabs.map(([k, l]) => `<button type="button" role="tab" data-action="adm-tab" data-tab="${k}" aria-pressed="${adm.tab === k}">${l}</button>`).join('')}</nav>
     <div id="pane"></div></div>`);
   actions({
-    'adm-logout': () => {
-      adminAuth.pw = '';
-      adminAuth.useGoogle = false;
+    'adm-logout': async () => {
+      await adminLogout();
       renderAdmin(main);
     },
     'adm-tab': (b) => {
@@ -7149,6 +7258,24 @@ async function renderAdmin(main) {
     },
   });
   showTab(main.querySelector('#pane'));
+  if (!adminLocal) {
+    // Relace vypršela (8 h) nebo se změnilo heslo → zpět na přihlášení.
+    if (!renderAdmin.bound) {
+      renderAdmin.bound = true;
+      window.addEventListener('pm-admin-expired', () => {
+        if (location.pathname.startsWith('/admin') || location.hash.startsWith('#/admin')) renderAdmin(document.getElementById('main'));
+      });
+    }
+    // Kontrola nastavení serveru: když něco chybí, ukáže přesně co a kde to opravit.
+    adminApi('health')
+      .then(({ health: h }) => {
+        const box = main.querySelector('.admin');
+        if (!box) return;
+        if (h.config.ADMIN_PASSWORD !== 'ok' && h.config.ADMIN_PASSWORD.startsWith('nastaveno')) box.insertAdjacentHTML('afterbegin', '<p class="notice warn"><strong>Slabé heslo administrace.</strong> ADMIN_PASSWORD má méně než 12 znaků. Na Vercelu ho změň na dlouhé náhodné heslo (např. 4–5 slov), přihlášení se tím zneplatní.</p>');
+        if (!h.ok) box.insertAdjacentHTML('afterbegin', diagnostics(h));
+      })
+      .catch((err) => main.querySelector('.admin')?.insertAdjacentHTML('afterbegin', `<p class="notice warn">${esc(err.message)}</p>`));
+  }
   return true;
 }
 
@@ -7421,7 +7548,7 @@ async function tabSettings(pane) {
     pane.innerHTML = `<p class="msg err">${esc(e.message)}</p>`;
     return;
   }
-  const feedRow = (f = {}) => `<div class="feed-row"><select data-f="category">${catOptions(f.category || 'elektro')}</select><input data-f="competitor" placeholder="Prodejce (např. Alza)" value="${esc(f.competitor || '')}"><input data-f="url" placeholder="https://… (Heureka XML, Google feed nebo CSV)" value="${esc(f.url || '')}"><button type="button" class="btn alt" data-action="adm-test-feed">Otestovat</button><button type="button" class="btn danger" data-action="adm-rm-row" aria-label="Odebrat feed">✕</button></div>`;
+  const feedRow = (f = {}) => `<div class="feed-row"><select data-f="category" aria-label="Odvětví">${catOptions(f.category || 'elektro')}</select><input data-f="competitor" aria-label="Prodejce" placeholder="Prodejce (např. ${esc(FEED_HINTS[f.category]?.shops[0] || 'Alza')})" value="${esc(f.competitor || '')}"><input data-f="url" aria-label="Adresa feedu" placeholder="https://… (Heureka XML, Google feed, XML sítě nebo CSV)" value="${esc(f.url || '')}"><label class="toggle small" title="Hlavní cena produktu = nejnižší dnešní cena z feedů"><input type="checkbox" data-f="mainPrice" ${f.mainPrice === false ? '' : 'checked'}> hlavní cena</label><button type="button" class="btn alt" data-action="adm-test-feed">Otestovat</button><button type="button" class="btn danger" data-action="adm-rm-row" aria-label="Odebrat feed">✕</button></div>`;
   pane.innerHTML = `<form class="card" id="sform">
     <h3>Inflace</h3><p class="small muted">Produkty se porovnají s meziroční inflací (ČSÚ).</p>
     <div class="grid2"><label class="field">Meziroční inflace (%)<input name="yoy" inputmode="decimal" value="${esc(s.inflation?.yoy ?? '')}"></label><label class="field">Za období<input name="ilabel" placeholder="září 2026" value="${esc(s.inflation?.label || '')}"></label></div>
@@ -7429,7 +7556,13 @@ async function tabSettings(pane) {
     <label class="field"><textarea name="aff" placeholder="alza.cz | {url}?idp=12345&#10;datart.cz | https://partner.example/?u={url_enc}">${esc((s.affiliates || []).map((a) => `${a.domain} | ${a.template}`).join('\n'))}</textarea></label>
     ${adminLocal ? '' : `<h3>Sponzor týdenního e-mailu</h3><div class="grid2"><label class="field">Text<input name="sptext" value="${esc(s.sponsor?.text || '')}"></label><label class="field">Odkaz<input name="spurl" value="${esc(s.sponsor?.url || '')}"></label></div>
     <h3>Schvalování</h3><label class="field inline"><input type="checkbox" name="approval" ${s.requireApproval ? 'checked' : ''}> Změny pořadí z automatické aktualizace čekají na moje schválení (ceny se ukládají hned)</label>
-    <h3>Feedy e-shopů</h3><p class="small muted">Každý den se z feedu načtou ceny a přiřadí se produktům v odvětví (podle EAN nebo názvu). Limit 30 MB na feed.</p>
+    <h3>Feedy e-shopů</h3><p class="small muted">Každý den se z feedu načtou ceny a přiřadí se produktům v odvětví – podle EAN, jinak podle názvu: musí sedět všechna slova z názvu i čísla z podtitulu (256 GB, 100 ml), příslušenství (kryty, testery, řemínky…) a jiné varianty (Pro, Max, Ultra…) se vynechají. U elektra, mobilů, sportu a kosmetiky je „hlavní cena“ produktu nejnižší dnešní cena z feedů. Formáty: Heureka/Zboží XML, Google Merchant, XML affiliate sítí (eHUB, Dognet…), CSV. Limit 30 MB, i .gz. Adresy uvnitř tvé sítě (localhost, 10.x, 192.168.x…) server z bezpečnostních důvodů nestáhne.</p>
+    <div class="feed-presets">${Object.entries(FEED_HINTS).map(([cat, h]) => `<div class="feed-preset"><b>${esc(categoryById(cat).name)}</b><span class="small muted">${esc(h.shops.join(', '))}</span><button type="button" class="btn alt" data-action="adm-preset-feed" data-cat="${cat}">+ feed</button></div>`).join('')}</div>
+    <details class="more"><summary>Kde feed získat</summary><ul class="small">
+      <li><b>Affiliate sítě</b> (eHUB, Dognet, CJ, Awin): po registraci a schválení do kampaně e-shopu dostaneš odkaz na produktový XML feed, často už s tvým partnerským odkazem.</li>
+      <li><b>Vlastní affiliate program e-shopu</b>: velké e-shopy mívají partnerský program s exportem produktů.</li>
+      <li><b>Přímo od e-shopu</b>: napiš jim o odkaz na jejich Heureka/Zboží/Google feed – bývá veřejný na adrese typu <code>/export/heureka.xml</code>.</li>
+      <li>Odkaz s osobním klíčem drž v tajnosti: ukládá se jen na serveru, návštěvníci ho nevidí.</li></ul></details>
     <div id="feeds">${(s.feeds || []).map(feedRow).join('')}</div><div class="btns"><button type="button" class="btn alt" data-action="adm-add-feed">Přidat feed</button></div><div id="ftest"></div>`}
     <h3>Fotky na pozadí</h3><p class="small muted">Bez vyplnění se berou fotky z Wikimedia Commons. Pro vlastní fotky zadej u odvětví jeden odkaz na řádek, volitelně s popiskem: <code>https://…/foto.jpg | Autor, licence</code>. Pole „Přehled“ platí pro úvodní stránku.</p>
     <div class="acc-list">${[['home', 'Přehled'], ...Object.keys(PHOTO_SETS).map((id) => [id, categoryById(id)?.name || id])]
@@ -7444,13 +7577,17 @@ async function tabSettings(pane) {
   actions({
     'adm-rm-row': (b) => b.parentElement.remove(),
     'adm-add-feed': () => feeds.insertAdjacentHTML('beforeend', feedRow()),
+    'adm-preset-feed': (b) => {
+      feeds.insertAdjacentHTML('beforeend', feedRow({ category: b.dataset.cat }));
+      feeds.lastElementChild.querySelector('[data-f=competitor]').focus();
+    },
     'adm-test-feed': (b) =>
           busy(b, async () => {
             const row = b.parentElement;
             const out = pane.querySelector('#ftest');
             try {
               const r = await adminApi('testFeed', { url: row.querySelector('[data-f=url]').value, category: row.querySelector('[data-f=category]').value });
-              out.innerHTML = `<p class="msg ok">Feed obsahuje ${r.items} položek, spárováno ${r.matched.length} produktů.</p>${r.matched.length ? `<ul class="small">${r.matched.map((m) => `<li>${esc(m.product)} → ${esc(m.item)}: ${esc(m.price)} Kč</li>`).join('')}</ul>` : ''}`;
+              out.innerHTML = `<p class="msg ok">Feed (${esc(r.format || '?')}) obsahuje ${esc(r.items)} položek, spárováno ${r.matched.length} produktů.</p>${r.matched.length ? `<ul class="small">${r.matched.map((m) => `<li>${esc(m.product)} → ${esc(m.item)}: ${esc(m.price)} Kč${m.ean ? ' (EAN)' : ''}</li>`).join('')}</ul>` : ''}${r.unmatched?.length ? `<p class="small muted">Nenalezeno: ${r.unmatched.map(esc).join(', ')}. Doplň u produktu EAN nebo uprav název/podtitul podle feedu.</p>` : ''}`;
             } catch (err) {
               out.innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
             }
@@ -7470,7 +7607,7 @@ async function tabSettings(pane) {
           .map((ta) => [ta.dataset.bg, ta.value.split(/\r?\n/).map((l) => l.split('|').map((x) => x.trim())).filter(([u]) => /^https?:\/\//.test(u || '') || (adminLocal && /^data:image\//.test(u || ''))).map(([url, credit]) => ({ url, credit: credit || '' }))])
           .filter(([, list]) => list.length)
       ),
-      feeds: feeds ? [...feeds.querySelectorAll('.feed-row')].map((r) => Object.fromEntries([...r.querySelectorAll('[data-f]')].map((i) => [i.dataset.f, i.value.trim()]))).filter((x) => x.url && x.competitor) : [],
+      feeds: feeds ? [...feeds.querySelectorAll('.feed-row')].map((r) => Object.fromEntries([...r.querySelectorAll('[data-f]')].map((i) => [i.dataset.f, i.type === 'checkbox' ? i.checked : i.value.trim()]))).filter((x) => x.url && x.competitor) : [],
     };
     try {
       await adminApi('setSettings', { settings });
@@ -8072,7 +8209,7 @@ return { renderBudget };
 // ----- app.js -----
 const __app_js = (() => {
 // BuyWise – start aplikace, hlavička, drawery, vyhledávání, router s přechody.
-const { S, store, CATEGORIES, GROUPS, categoryById, catName, groupName, esc, link, catLink, productLink, navigate, currentPath, ICON, CURRENCIES, currency, sum, priceText, savedScroll, saveScroll, fullProduct, productById } = __js_core_js;
+const { S, store, CATEGORIES, GROUPS, categoryById, catName, groupName, esc, link, catLink, productLink, navigate, currentPath, ICON, CURRENCIES, currency, sum, priceText, savedScroll, saveScroll, fullProduct, productById, safeHref } = __js_core_js;
 const { t, lang, setLang } = __js_i18n_js;
 const { hideTip: hideChartTip } = __js_chart_js;
 const { favs, cmp, wish, initAuth, login, logout, authAvailable, checkLocalAlerts, checkWishes } = __js_user_js;
@@ -8367,6 +8504,8 @@ function renderBanner() {
       : `<strong>${t('Samostatná HTML verze s ukázkovými daty.')}</strong> ${t('Ceny a historie jsou vygenerované. Vlastní data přidáš v sekci Úpravy dat, živá data má verze na Vercelu.')}`
     : m === 'demo'
     ? `<strong>${t('Ukázková data.')}</strong> ${t('Ceny a historie jsou vygenerované pro náhled. Po připojení Firebase se zobrazí skutečná data.')}`
+    : m === 'db-error'
+    ? `<strong>${t('Databázi se nepodařilo načíst.')}</strong> ${t('Zobrazují se ukázková data. Správce: v Administraci uvidíš, které nastavení na Vercelu je špatně.')}`
     : m === 'empty'
     ? `<strong>${t('Databáze je zatím prázdná.')}</strong> ${t('V administraci klikni na „Naplnit výchozími daty“ a „Aktualizovat živá data“.')}`
     : '';
@@ -8380,7 +8519,7 @@ function renderBanner() {
       : '';
   const sp = S.data.settings?.sponsor;
   const spEl = document.getElementById('foot-sponsor');
-  if (spEl) spEl.innerHTML = sp?.text ? `${t('Partner:')} ${sp.url ? `<a href="${esc(sp.url)}" rel="sponsored noopener" target="_blank">${esc(sp.text)}</a>` : esc(sp.text)}` : '';
+  if (spEl) spEl.innerHTML = sp?.text ? `${t('Partner:')} ${safeHref(sp.url) ? `<a href="${esc(safeHref(sp.url))}" rel="sponsored noopener noreferrer" target="_blank">${esc(sp.text)}</a>` : esc(sp.text)}` : '';
   document.querySelectorAll('[data-t]').forEach((el) => (el.textContent = t(el.dataset.t)));
 }
 
@@ -8562,6 +8701,8 @@ function onOutside(e) {
   $main.innerHTML = `<section class="hero"><div class="hero-in"><div class="hero-main"><p class="hero-lead">${t('Načítám data…')}</p></div></div></section>`;
   if (!S.hash && location.hash.startsWith('#/')) history.replaceState(history.state, '', location.hash.slice(1));
   installClickHandler({ onLink, onOutside });
+  // Nenačtený náhled produktu se skryje (místo inline onerror, které by zakazovala Content-Security-Policy).
+  document.addEventListener('error', (e) => e.target?.matches?.('img.thumb, img.p-thumb') && e.target.remove(), true);
   installTooltips();
 
   const [data, config] = await Promise.all([loadData(), S.standalone ? null : loadConfig()]);
