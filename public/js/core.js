@@ -147,6 +147,7 @@ export function priceText(p, s) {
 
 // Bezpečný odkaz: jen http(s). Odkazy pocházejí i z cizích feedů e-shopů, takže „javascript:…“ se nesmí dostat do href.
 export function safeHref(u) {
+  if (!u || !String(u).trim()) return '';
   try {
     const url = new URL(String(u || ''), location.href);
     return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : '';

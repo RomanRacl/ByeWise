@@ -1,7 +1,7 @@
 // BuyWise – start aplikace, hlavička, drawery, vyhledávání, router s přechody.
 import {
   S, store, CATEGORIES, GROUPS, categoryById, catName, groupName, esc, link, catLink, productLink, navigate, currentPath, ICON, CURRENCIES, currency,
-  sum, priceText, savedScroll, saveScroll, fullProduct, productById, safeHref,
+  sum, priceText, savedScroll, saveScroll, fullProduct, productById, safeHref, money,
 } from './js/core.js';
 import { t, lang, setLang } from './js/i18n.js';
 import { hideTip as hideChartTip } from './js/chart.js';
@@ -21,6 +21,7 @@ import { renderWishlist } from './js/views/wishlist.js';
 import { renderCalendar } from './js/views/calendar.js';
 import { renderDeals } from './js/views/deals.js';
 import { renderBudget } from './js/views/budget.js';
+import { renderSearch, trackedMatches, fetchOffers } from './js/views/search.js';
 import { seasonality, categorySeasonality, clean } from './lib/analytics.js';
 import { demoProducts, DEMO_RATES } from './lib/seed.js';
 
@@ -90,7 +91,7 @@ function renderHeader(route) {
       </a>
       <div class="search" role="search">
         <span class="search-ico">${ICON.search}</span>
-        <input id="q" type="search" autocomplete="off" placeholder="${esc(t('Hledat produkt, destinaci, akcii…'))}" aria-label="${esc(t('Hledat'))}" aria-controls="qres" aria-expanded="false" aria-autocomplete="list">
+        <input id="q" type="search" autocomplete="off" placeholder="${esc(t('Hledat jakýkoli produkt a jeho ceny…'))}" aria-label="${esc(t('Hledat'))}" aria-controls="qres" aria-expanded="false" aria-autocomplete="list">
         <kbd class="kbd" aria-hidden="true">/</kbd>
         <div id="qres" class="qres" role="listbox" hidden></div>
       </div>
@@ -217,36 +218,48 @@ function bindSearch() {
   const q = $header.querySelector('#q');
   const res = $header.querySelector('#qres');
   let active = -1;
-  const norm = (s) => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const norm = (s) => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const close = () => {
     res.hidden = true;
     q.setAttribute('aria-expanded', 'false');
     q.removeAttribute('aria-activedescendant');
   };
+  let timer = null;
+  let token = 0;
+  const label = (txt) => `<p class="q-label">${txt}</p>`;
   const search = () => {
-    const term = norm(q.value.trim());
+    const raw = q.value.trim();
+    const term = norm(raw);
     active = -1;
+    clearTimeout(timer);
     if (term.length < 2) return close();
-    const words = term.split(/\s+/);
-    const hits = S.data.products
-      .map((p) => {
-        const hay = norm(`${p.name} ${p.subtitle || ''} ${catName(categoryById(p.category))}`);
-        if (!words.every((w) => hay.includes(w))) return null;
-        return { p, score: (norm(p.name).startsWith(words[0]) ? 0 : 1) + (p.rank ? 0 : 2) + (p.active === false ? 3 : 0) };
+    const hits = trackedMatches(raw, 5);
+    const tracked = hits
+      .map((p, i) => {
+        const s = sum(p);
+        return `<a role="option" id="qo${i}" href="${productLink(p.id)}" data-prefetch="${esc(p.id)}"><span class="q-tag tag ${p.rank ? '' : 'dim'}">${p.rank || '–'}</span><span class="q-txt"><span class="nm">${esc(p.name)}</span><span class="muted small">${esc(catName(categoryById(p.category)))}</span></span><span class="pr">${priceText(p, s)}</span></a>`;
       })
-      .filter(Boolean)
-      .sort((a, b) => a.score - b.score || (a.p.rank ?? 99) - (b.p.rank ?? 99))
-      .slice(0, 8);
-    res.innerHTML = hits.length
-      ? hits
-          .map(({ p }, i) => {
-            const s = sum(p);
-            return `<a role="option" id="qo${i}" href="${productLink(p.id)}" data-prefetch="${esc(p.id)}"><span class="q-tag tag ${p.rank ? '' : 'dim'}">${p.rank || '–'}</span><span class="q-txt"><span class="nm">${esc(p.name)}</span><span class="muted small">${esc(catName(categoryById(p.category)))}</span></span><span class="pr">${priceText(p, s)}</span></a>`;
-          })
-          .join('')
-      : `<p class="empty">${t('Nic nenalezeno.')}</p>`;
+      .join('');
+    const all = `<a role="option" id="qo-all" class="q-all" href="${link('/hledat?q=' + encodeURIComponent(raw))}">${ICON.search}<span>${t('Ceny „{q}“ ve všech obchodech', { q: esc(raw) })}</span>${ICON.arrow}</a>`;
+    res.innerHTML = (hits.length ? label(t('Sledované produkty')) + tracked : '') + `<div id="qshops">${term.length >= 3 ? label(t('V obchodech')) + '<p class="q-wait">…</p>' : ''}</div>` + all;
     res.hidden = false;
     q.setAttribute('aria-expanded', 'true');
+    // Nabídky obchodů se dotáhnou se zpožděním (až uživatel dopíše).
+    if (term.length < 3) return;
+    const my = ++token;
+    timer = setTimeout(async () => {
+      const r = await fetchOffers(raw, 4);
+      if (my !== token || res.hidden) return;
+      const box = res.querySelector('#qshops');
+      if (!box) return;
+      box.innerHTML = r.groups?.length
+        ? label(t('V obchodech')) +
+          r.groups
+            .slice(0, 4)
+            .map((g, i) => `<a role="option" id="qs${i}" href="${link('/hledat?q=' + encodeURIComponent(g.name))}"><span class="q-shops">${g.shops}×</span><span class="q-txt"><span class="nm">${esc(g.name)}</span><span class="muted small">${g.shops > 1 ? t('{n} obchodů', { n: g.shops }) : esc(g.offers[0].shop)}</span></span><span class="pr"><small>${t('od')}</small> ${money(g.minPrice)}</span></a>`)
+            .join('')
+        : '';
+    }, 280);
   };
   q.addEventListener('input', search);
   q.addEventListener('focus', search);
@@ -260,13 +273,15 @@ function bindSearch() {
       q.setAttribute('aria-activedescendant', opts[active].id);
       opts[active].scrollIntoView({ block: 'nearest' });
     } else if (e.key === 'Enter') {
-      const o = opts[active] || opts[0];
-      if (o) {
+      // Enter bez výběru šipkami → stránka s cenami ve všech obchodech.
+      const o = opts[active];
+      const raw = q.value.trim();
+      if (o || raw.length >= 2) {
         e.preventDefault();
         close();
         q.value = '';
         q.blur();
-        navigate(o.getAttribute('href').replace(/^#/, ''));
+        navigate(o ? o.getAttribute('href').replace(/^#/, '') : '/hledat?q=' + encodeURIComponent(raw));
       }
     } else if (e.key === 'Escape') {
       close();
@@ -340,6 +355,7 @@ function parseRoute() {
   if (a === 'kalendar') return { ...base, name: 'calendar' };
   if (a === 'pozor') return { ...base, name: 'deals' };
   if (a === 'rozpocet') return { ...base, name: 'budget' };
+  if (a === 'hledat') return { ...base, name: 'search' };
   if (a === 'admin') return { ...base, name: 'admin' };
   if (!a) return { ...base, name: 'home' };
   return { ...base, name: 'notfound' };
@@ -366,6 +382,11 @@ function backdropFor(r) {
     const c = r.query.get('odvetvi') && categoryById(r.query.get('odvetvi')) ? r.query.get('odvetvi') : 'elektro';
     return setBackdrop('cat:' + c, groupOf(c), () => categoryPhotos(c));
   }
+  if (r.name === 'search') {
+    const p = trackedMatches(r.query.get('q') || '', 1)[0];
+    if (p) return setBackdrop('p:' + p.id, groupOf(p.category), () => productPhotos(p));
+    return setBackdrop('cat:elektro', 'nakupy', () => categoryPhotos('elektro'));
+  }
   if (r.name === 'calendar') return setBackdrop('cat:dovolene', 'domacnost', () => categoryPhotos('dovolene'));
   return setBackdrop('home', 'nakupy', homePhotos);
 }
@@ -390,6 +411,7 @@ async function render(r) {
   else if (r.name === 'calendar') view = renderCalendar($main, r.query);
   else if (r.name === 'deals') view = renderDeals($main, r.query);
   else if (r.name === 'budget') view = renderBudget($main, r.query);
+  else if (r.name === 'search') view = renderSearch($main, r.query);
   else if (r.name === 'home') view = renderHome($main) ?? true;
   else ok = false;
   if (!view) ok = false;

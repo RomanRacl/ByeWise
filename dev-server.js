@@ -24,7 +24,7 @@ const HEADERS = Object.fromEntries((VERCEL.headers.find((h) => h.source === '/(.
 // Na http://localhost nemá smysl HSTS ani přesměrování na https.
 delete HEADERS['Strict-Transport-Security'];
 if (HEADERS['Content-Security-Policy']) HEADERS['Content-Security-Policy'] = HEADERS['Content-Security-Policy'].replace(/;\s*upgrade-insecure-requests/, '');
-const SPA = /^\/(kategorie|produkt|porovnat|oblibene|portfolio|stav|admin|prani|kalendar|pozor|rozpocet)(\/|$)/;
+const SPA = /^\/(kategorie|produkt|porovnat|oblibene|portfolio|stav|admin|prani|kalendar|pozor|rozpocet|hledat)(\/|$)/;
 const API = { '/sitemap.xml': 'sitemap' };
 
 createServer(async (req, res) => {

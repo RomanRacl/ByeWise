@@ -1,6 +1,7 @@
 // Výchozí (ukázková) data. Pořadí aut vychází ze statistik SDA za 1–4/2026, destinace a knihy
 // z veřejných žebříčků 2025/2026. Ceny jsou ORIENTAČNÍ – po nasazení je přepiš v administraci
-// (uložení zruší štítek „ukázka“). Krypto, akcie, komodity a hry se po nasazení plní samy.
+// (uložení zruší štítek „ukázka“). Krypto, akcie, komodity, hry a paliva (Natural 95, nafta, LPG – ČSÚ)
+// se po nasazení plní samy. Ceny paliv odpovídají průměru ČR podle ČSÚ za 43. týden 2026.
 
 export const slug = (s) =>
   s
@@ -215,11 +216,11 @@ const RAW = {
   pohonne: {
     unit: 'Kč/l', vol: 0.004, season: [-2, -2, -1, 1, 2, 3, 3, 2, 0, -1, -2, -2],
     items: [
-      ['Natural 95', 'benzin', 37.9, 'Nejprodávanější palivo', 0, [['Orlen', 0], ['MOL', 0.5], ['Shell', 3], ['OMV', 2]], -3],
-      ['Nafta', 'motorová nafta', 36.5, 'Firemní flotily', 0, [['Orlen', 0], ['MOL', 0.4], ['Shell', 3], ['OMV', 2]], -4],
-      ['LPG', 'autoplyn', 17.5, 'Levná alternativa', 0, [['Orlen', 0], ['MOL', 1]], -2],
-      ['Natural 98', 'prémiový benzin', 41.5, 'Prémiové palivo', 0, [['Shell', 0], ['OMV', -1], ['MOL', -2]], -3],
-      ['Prémiová nafta', 'aditivovaná', 39.4, 'Prémiové palivo', 0, [['Shell', 0], ['OMV', -1]], -4],
+      ['Natural 95', 'benzin', 45.33, 'Nejprodávanější palivo', 0, [['Orlen', 0], ['MOL', 0.5], ['Shell', 3], ['OMV', 2]], -3],
+      ['Nafta', 'motorová nafta', 47.55, 'Firemní flotily', 0, [['Orlen', 0], ['MOL', 0.4], ['Shell', 3], ['OMV', 2]], -4],
+      ['LPG', 'autoplyn', 23.27, 'Levná alternativa', 0, [['Orlen', 0], ['MOL', 1]], -2],
+      ['Natural 98', 'prémiový benzin', 48.9, 'Prémiové palivo', 0, [['Shell', 0], ['OMV', -1], ['MOL', -2]], -3],
+      ['Prémiová nafta', 'aditivovaná', 50.4, 'Prémiové palivo', 0, [['Shell', 0], ['OMV', -1]], -4],
       ['CNG', 'stlačený zemní plyn', 39.9, 'Kč/kg', 0, [], 1, { unit: 'Kč/kg' }],
       ['Nabíjení DC', 'rychlonabíjení', 12.9, 'Rostoucí poptávka', 0, [['ČEZ', 0], ['PRE', -3], ['Ionity', 25]], 0, { unit: 'Kč/kWh' }],
       ['Nabíjení AC', 'veřejné stojany', 8.9, 'Rostoucí poptávka', 0, [['ČEZ', 0], ['PRE', -2]], 0, { unit: 'Kč/kWh' }],

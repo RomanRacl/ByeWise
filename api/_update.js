@@ -1,14 +1,14 @@
 // Denní aktualizace: komodity a akcie (Yahoo + ČNB), krypto (CoinGecko), hry (Steam), feedy e-shopů.
 // Pak vyhodnotí hlídače cen, v pondělí pošle týdenní souhrn a v neděli udělá zálohu.
-import { loadAll, saveProducts, setMeta, getMeta, getSettings, setDoc, listCollection, getDb, getBucket, todayIso, audit } from './_db.js';
+import { loadAll, saveProducts, setMeta, getMeta, getSettings, setDoc, getDoc, listCollection, getDb, getBucket, todayIso, audit } from './_db.js';
 import {
   cnbRates, COMMODITIES, STOCKS, yahooHistory, relativeVolume, cryptoTop, cryptoHistory,
   steamTopSellers, steamMostPlayed, steamAppDetails, steamPlayers,
 } from './_sources.js';
 import { safeFetch } from './_security.js';
 import { sendEmail, sendPush, notifyAdmin, emailEnabled, pushEnabled, emailLayout, esc, siteUrl } from './_notify.js';
-import { slug } from '../public/lib/seed.js';
-import { addPoint, parseFeed, matchFeedItem, prepareFeed, todayIso as dayIso } from '../public/lib/dataops.js';
+import { slug, seedProducts } from '../public/lib/seed.js';
+import { addPoint, parseFeed, matchFeedItem, prepareFeed, todayIso as dayIso, parseCsuFuel, mergeHistory, CSU_FUEL_URL } from '../public/lib/dataops.js';
 import { summarize, clean, last, scoreProduct, seasonality, categorySeasonality } from '../public/lib/analytics.js';
 import { categoryById, CATEGORIES } from '../public/lib/categories.js';
 
@@ -151,6 +151,40 @@ async function games(existing) {
   return { products, errors: [], count: list.length };
 }
 
+// ---------- Pohonné hmoty: týdenní průměr ČR z otevřených dat ČSÚ ----------
+// Natural 95, nafta a LPG se plní samy včetně historie (každý týden jeden bod). Ostatní položky odvětví
+// (Natural 98, prémiová nafta, CNG, nabíjení) zůstávají ruční.
+export async function fuelPrices(existing, fetchText = async () => {
+  const r = await fetch(CSU_FUEL_URL, { headers: { 'User-Agent': 'BuyWise/3 (+ceny PHM)' }, signal: AbortSignal.timeout(25000) });
+  if (!r.ok) throw new Error(`ČSÚ ${r.status}`);
+  return r.text();
+}) {
+  const series = parseCsuFuel(await fetchText());
+  const names = Object.keys(series);
+  if (!names.length) throw new Error('ČSÚ: v datech nejsou ceny paliv (možná se změnil formát souboru)');
+  const seed = new Map(seedProducts().map((p) => [p.id, p]));
+  const products = [];
+  const errors = [];
+  for (const name of names) {
+    const id = `pohonne-${slug(name)}`;
+    const prev = existing.get(id) || seed.get(id);
+    if (!prev) continue;
+    const pts = series[name];
+    const lastD = pts[pts.length - 1].d;
+    if (Date.now() - Date.parse(lastD) > 21 * 86400000) errors.push(`ČSÚ: poslední cena ${name} je z ${lastD} (data jsou stará)`);
+    // Ukázkové (vymyšlené) ceny se nahradí celou skutečnou historií.
+    const base = prev.sample ? [] : prev.prices || [];
+    products.push({
+      ...prev,
+      prices: mergeHistory(base, pts),
+      sample: false,
+      source: `ČSÚ – průměrná cena v ČR, týden do ${lastD.split('-').reverse().join('. ').replace(/^0/, '')}`,
+      updatedAt: now(),
+    });
+  }
+  return { products, errors, count: products.length };
+}
+
 // Ceny prodejců z feedů – aktualizuje existující produkty v odvětví.
 // U odvětví s „nejnižší cenou“ (elektro, mobily, sport, kosmetika) se z dnešních cen prodejců
 // spočítá i hlavní cena produktu (lze vypnout u feedu volbou mainPrice: false).
@@ -160,12 +194,14 @@ export async function feeds(settings, state, fetcher = (url) => safeFetch(url, {
   const touched = new Map();
   const mainFor = new Set();
   const perFeed = [];
+  const offers = []; // celé feedy pro vyhledávání „jakéhokoli produktu“
   let matched = 0;
   for (const f of settings.feeds || []) {
     if (!f.url || !f.category || !f.competitor) continue;
     try {
       const items = prepareFeed(parseFeed(await fetcher(f.url)));
       if (!items.length) throw new Error('feed neobsahuje žádné položky');
+      offers.push({ shop: f.competitor, category: f.category, items: items.slice(0, OFFERS_PER_FEED).map((it) => [it.name, it.price, it.url || '', it.ean || '']) });
       let n = 0;
       for (const p of state.values()) {
         if (p.category !== f.category || p.active === false) continue;
@@ -199,7 +235,44 @@ export async function feeds(settings, state, fetcher = (url) => safeFetch(url, {
       p.sample = false;
     }
   }
-  return { products: [...touched.values()], errors, count: matched, perFeed };
+  return { products: [...touched.values()], errors, count: matched, perFeed, offers };
+}
+
+// ---------- Index nabídek pro vyhledávání ----------
+// Firestore má limit 1 MB na dokument → položky se ukládají po dávkách (offers/{obchod}-{n}).
+export const OFFERS_PER_FEED = 60000;
+const CHUNK_BYTES = 700 * 1024;
+export async function saveOffers(list) {
+  const db = await getDb();
+  if (!db) return { chunks: 0 };
+  const prev = (await getDoc('meta/offers')) || { docs: [] };
+  const docs = [];
+  const at = now();
+  for (const src of list) {
+    const base = `${slug(src.shop)}-${slug(src.category)}`.slice(0, 60);
+    let chunk = [];
+    let size = 0;
+    let n = 0;
+    const flush = async () => {
+      if (!chunk.length) return;
+      const id = `${base}-${n++}`;
+      await db.collection('offers').doc(id).set({ shop: src.shop, category: src.category, at, items: JSON.stringify(chunk) });
+      docs.push(id);
+      chunk = [];
+      size = 0;
+    };
+    for (const it of src.items) {
+      const len = JSON.stringify(it).length + 1;
+      if (size + len > CHUNK_BYTES) await flush();
+      chunk.push(it);
+      size += len;
+    }
+    await flush();
+  }
+  // Smazat dávky, které už neexistují (odebraný feed nebo menší feed).
+  for (const id of prev.docs || []) if (!docs.includes(id)) await db.collection('offers').doc(id).delete().catch(() => {});
+  await setDoc('meta/offers', { docs, at, shops: [...new Set(list.map((x) => x.shop))], count: list.reduce((a, x) => a + x.items.length, 0) }, false);
+  return { chunks: docs.length };
 }
 
 // ---------- Hlídače cen ----------
@@ -407,7 +480,22 @@ export async function runUpdate({ trigger = 'cron', weekly = false } = {}) {
   // Stav po automatických zdrojích (pro párování feedů).
   const state = new Map(existing);
   for (const [id, p] of changed) state.set(id, p);
-  if ((settings.feeds || []).length) await run('feedy', 'Ceny z feedů', () => feeds(settings, state));
+  await run('pohonne', 'Pohonné hmoty (ČSÚ)', () => fuelPrices(existing));
+  let feedOffers = null;
+  if ((settings.feeds || []).length)
+    await run('feedy', 'Ceny z feedů', async () => {
+      const r = await feeds(settings, state);
+      feedOffers = r.offers;
+      return r;
+    });
+  if (feedOffers) {
+    try {
+      const o = await saveOffers(feedOffers);
+      log.push(`Index vyhledávání: ${feedOffers.reduce((a, x) => a + x.items.length, 0)} nabídek (${o.chunks} dávek)`);
+    } catch (e) {
+      errors.push(`Index vyhledávání: ${e.message}`);
+    }
+  }
   for (const [id, p] of changed) state.set(id, p);
 
   // Režim schvalování: ceny se uloží, změny pořadí čekají na schválení.

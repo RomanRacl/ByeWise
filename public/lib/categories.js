@@ -108,8 +108,8 @@ export const CATEGORIES = [
     name: 'Pohonné hmoty', en: 'Fuel',
     priceLabel: 'Průměr ČR', priceLabelEn: 'Czech average',
     demandLabel: 'Spotřeba', demandLabelEn: 'Consumption',
-    sourceNote: 'Průměrné ceny paliv a nabíjení v Česku (ČSÚ, CCS). Doplňuje se v administraci, ideálně každý týden.',
-    sourceNoteEn: 'Average fuel and charging prices in Czechia. Updated in the admin, ideally weekly.',
+    sourceNote: 'Natural 95, nafta a LPG: týdenní průměr za celé Česko z otevřených dat ČSÚ, plní se automaticky. Ostatní paliva a nabíjení se doplňují v administraci.',
+    sourceNoteEn: 'Natural 95, diesel and LPG: weekly Czech average from Czech Statistical Office open data, updated automatically. Other fuels and charging are updated in the admin.',
   },
   {
     id: 'energie', group: 'domacnost', kind: 'spotrebni', source: 'manual',

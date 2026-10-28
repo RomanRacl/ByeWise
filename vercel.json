@@ -27,6 +27,9 @@
     },
     "api/v1.js": {
       "maxDuration": 15
+    },
+    "api/search.js": {
+      "maxDuration": 15
     }
   },
   "rewrites": [
@@ -41,6 +44,10 @@
     {
       "source": "/:page(prani|kalendar|pozor|rozpocet)",
       "destination": "/api/page?path=/:page"
+    },
+    {
+      "source": "/hledat",
+      "destination": "/index.html"
     },
     {
       "source": "/(porovnat|oblibene|portfolio|stav|admin)",

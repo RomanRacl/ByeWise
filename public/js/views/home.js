@@ -1,4 +1,4 @@
-import { S, CATEGORIES, GROUPS, categoryById, catName, groupName, byCat, allRanked, sum, money, pct, pctClass, esc, priceText, productLink, catLink, link, monthName, nf, hero, sheet, ICON, insight, scoreBadge, scoreWhen } from '../core.js';
+import { S, CATEGORIES, GROUPS, categoryById, catName, groupName, byCat, allRanked, sum, money, pct, pctClass, esc, priceText, productLink, catLink, link, monthName, nf, hero, sheet, ICON, insight, scoreBadge, scoreWhen, navigate } from '../core.js';
 import { wishButton } from '../user.js';
 import { actions } from '../ui.js';
 import { investSignal, competitorAnalysis } from '../../lib/analytics.js';
@@ -93,7 +93,7 @@ export function renderHome(main) {
     eyebrow: t('Kupuj chytře. Víš, kdy cena klesne.'),
     title: t('Co Česko právě kupuje a kam míří ceny'),
     lead: t('Deset nejžádanějších produktů v {n} odvětvích, skóre Kup teď / Počkej, odhad ceny na příští měsíc a srovnání prodejců.', { n: CATEGORIES.length }),
-    below: `<div class="hero-cats">${GROUPS.map((g) => `<a class="chip-link" href="${catLink(CATEGORIES.find((c) => c.group === g.id).id)}">${esc(groupName(g))}</a>`).join('')}</div>`,
+    below: `<form class="big-search" id="home-search" role="search"><span class="search-ico">${ICON.search}</span><input name="q" type="search" placeholder="${esc(t('Jakýkoli produkt – uvidíš ceny ve všech obchodech'))}" aria-label="${esc(t('Hledat produkt'))}" autocomplete="off" enterkeyhint="search"><button class="btn" type="submit">${t('Hledat')}</button></form><div class="hero-cats">${GROUPS.map((g) => `<a class="chip-link" href="${catLink(CATEGORIES.find((c) => c.group === g.id).id)}">${esc(groupName(g))}</a>`).join('')}</div>`,
     aside: `<dl class="pulse" aria-label="${esc(t('Souhrn trendů'))}">
         <div><dt>${t('produktů zdražuje')}</dt><dd class="up" data-count="${count('roste')}">${count('roste')}</dd></div>
         <div><dt>${t('zlevňuje')}</dt><dd class="down" data-count="${count('klesa')}">${count('klesa')}</dd></div>
@@ -160,6 +160,11 @@ export function renderHome(main) {
       )}
     </section>`);
   countUp(main);
+  main.querySelector('#home-search')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const q = e.target.q.value.trim();
+    if (q.length >= 2) navigate('/hledat?q=' + encodeURIComponent(q));
+  });
   return true;
 }
 

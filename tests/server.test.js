@@ -19,6 +19,10 @@ globalThis.fetch = async (url, opts = {}) => {
   const u = new URL(url);
   const json = (o, status = 200) => ({ ok: status < 400, status, json: async () => o, text: async () => JSON.stringify(o), headers: new Map() });
   const text = (t) => ({ ok: true, status: 200, text: async () => t, json: async () => JSON.parse(t), arrayBuffer: async () => new TextEncoder().encode(t).buffer, headers: { get: () => null } });
+  if (u.hostname === 'vdb.czso.cz') {
+    const d = (n) => new Date(Date.now() - n * 7 * DAY).toISOString().slice(0, 10);
+    return text('idhod,hodnota,obdobiod,obdobido,uzemi_txt,cenapohhmt_txt\n' + [3, 2, 1, 0].map((w) => `${w}a,"${(44 + (3 - w) * 0.4).toFixed(2).replace('.', ',')}",${d(w)},${d(w)},Česko,Automobilový benzin Natural 95\n${w}b,"47,6",${d(w)},${d(w)},Česko,Motorová nafta\n${w}c,"46,9",${d(w)},${d(w)},Hlavní město Praha,Motorová nafta`).join('\n'));
+  }
   if (u.hostname === 'www.cnb.cz') return text('28.10.2026 #209\nzemě|měna|množství|kód|kurz\nEMU|euro|1|EUR|24,350\nUSA|dolar|1|USD|21,100\n');
   if (u.hostname.endsWith('finance.yahoo.com')) {
     const sym = decodeURIComponent(u.pathname.split('/').pop());
@@ -120,6 +124,13 @@ assert.equal(prod('hry-2').free, true);
 assert.ok(!STORE.has('products/hry-3') && !STORE.has('products/hry-4'));
 assert.equal([...STORE.keys()].filter((k) => k.startsWith('products/hry-') && prod(k.split('/')[1]).active).length, 10);
 assert.equal(prod('hry-1').rankHistory.at(-1).r, 1);
+// Pohonné hmoty z ČSÚ: týdenní historie, ukázkové ceny nahrazené, Praha se nepočítá
+const n95 = prod('pohonne-natural-95');
+assert.equal(n95.prices.length, 4, 'týdenní historie z ČSÚ');
+assert.equal(n95.prices.at(-1).p, 45.2);
+assert.equal(n95.sample, false);
+assert.match(n95.source, /ČSÚ/);
+assert.equal(prod('pohonne-nafta').prices.at(-1).p, 47.6, 'bez krajských řádků');
 
 // 3) Admin – uložení, hromadná úprava, import textu, nastavení, historie
 r = await admin({ action: 'save', product: { id: 'elektro-apple-iphone-17', name: 'Apple iPhone 17', category: 'elektro', price: '23 990', rank: 1, competitors: [{ name: 'Alza', price: '23990' }] } });
@@ -196,6 +207,15 @@ r = await admin({ action: 'pending' });
 assert.ok(r.body.pending?.proposals?.length > 0, 'změny pořadí čekají');
 r = await admin({ action: 'approve' });
 assert.ok(r.body.applied > 0);
+
+// Vyhledávání jakéhokoli produktu: index z feedů + ceny prodejců u sledovaných produktů
+assert.ok(STORE.get('meta/offers')?.docs?.length >= 1, 'index nabídek uložen');
+r = await call('search', { method: 'GET', query: { q: 'iphone 17' } });
+assert.equal(r.statusCode, 200, JSON.stringify(r.body));
+const ip17 = r.body.groups.find((g) => /iPhone 17/.test(g.name) && g.offers.some((o) => o.shop === 'Alza'));
+assert.ok(ip17, JSON.stringify(r.body.groups.map((g) => g.name)));
+assert.equal(ip17.offers[0].price, Math.min(...ip17.offers.map((o) => o.price)), 'seřazeno od nejlevnější');
+assert.equal((await call('search', { method: 'GET', query: { q: 'x' } })).statusCode, 400);
 
 // 6) Více adminů přes Google účet
 assert.equal((await call('admin', { headers: { authorization: 'Bearer tok-b-boss@firma.cz' }, body: { action: 'status' } })).statusCode, 200);

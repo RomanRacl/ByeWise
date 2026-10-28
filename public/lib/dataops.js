@@ -246,12 +246,13 @@ export function parseFeed(text) {
 }
 
 // Tokeny pro párování: bez diakritiky, čísla oddělená od jednotek („256GB“ → 256 gb, „100ml“ → 100 ml).
+export const searchTokens = (s) => tokens(s);
 const tokens = (s) =>
   slug(String(s).replace(/(\d)([a-z])/gi, '$1 $2').replace(/([a-z])(\d)/gi, (m, a, d) => (/[a-z]/i.test(a) && /^(e|s)$/i.test(a) ? m : `${a} ${d}`)))
     .split('-')
     .filter(Boolean);
 // Slova příslušenství: když jsou v položce feedu a ne v názvu produktu, nejde o produkt samotný.
-const ACCESSORY = new Set(['kryt', 'obal', 'pouzdro', 'flip', 'ochranne', 'ochranny', 'sklo', 'folie', 'nabijecka', 'nabijeci', 'kabel', 'adapter', 'drzak', 'reminek', 'remen', 'naramek', 'nahradni', 'tester', 'vzorek', 'miniatura', 'naplne', 'naplni', 'filtr', 'filtry', 'sacky', 'kartac', 'hlavice', 'stojan', 'podlozka', 'taska', 'batoh', 'brasna', 'skin', 'case', 'cover', 'tempered', 'protector', 'charger', 'cable', 'strap', 'refill', 'set', 'sada', 'darkova', 'repasovany', 'repasovana', 'rozbaleno', 'pouzite', 'bazar']);
+export const ACCESSORY = new Set(['kryt', 'obal', 'pouzdro', 'flip', 'ochranne', 'ochranny', 'sklo', 'folie', 'nabijecka', 'nabijeci', 'kabel', 'adapter', 'drzak', 'reminek', 'remen', 'naramek', 'nahradni', 'tester', 'vzorek', 'miniatura', 'naplne', 'naplni', 'filtr', 'filtry', 'sacky', 'kartac', 'hlavice', 'stojan', 'podlozka', 'taska', 'batoh', 'brasna', 'skin', 'case', 'cover', 'tempered', 'protector', 'charger', 'cable', 'strap', 'refill', 'set', 'sada', 'darkova', 'repasovany', 'repasovana', 'rozbaleno', 'pouzite', 'bazar']);
 // Označení variant modelu: „iPhone 17“ nesmí spárovat „iPhone 17 Pro“.
 const VARIANT = new Set(['pro', 'max', 'plus', 'ultra', 'mini', 'lite', 'fe', 'neo', 'edge', 'air', 'prime', 'xl', 'xxl']);
 
@@ -325,4 +326,125 @@ export function parseAffiliateRules(text) {
     .map((l) => l.split('|').map((x) => x.trim()))
     .filter(([d, t]) => d && t)
     .map(([domain, template]) => ({ domain: domain.replace(/^www\./, ''), template }));
+}
+
+// ---------- Ceny pohonných hmot z ČSÚ (otevřená data, týdenní průměr za ČR) ----------
+// Formát CSV od ČSÚ se občas mění (oddělovač, názvy sloupců), proto se sloupce poznávají podle názvu i obsahu:
+// hodnota = cena, období = datum (konec týdne), text = druh paliva, území = jen celá ČR.
+export const CSU_FUEL_URL = 'https://vdb.czso.cz/pll/eweb/cenyphm.data';
+const FUELS = [
+  ['Natural 95', /natural\s*95|benz[ií]n|automobilov[ýy] benz/i],
+  ['Nafta', /nafta|diesel/i],
+  ['LPG', /\bLPG\b|autoplyn/i],
+];
+function csvRows(text) {
+  const lines = String(text).replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return [];
+  const sep = (lines[0].match(/;/g) || []).length > (lines[0].match(/,/g) || []).length ? ';' : ',';
+  const split = (line) => {
+    const out = [];
+    let cur = '', q = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q;
+      } else if (ch === sep && !q) { out.push(cur); cur = ''; } else cur += ch;
+    }
+    out.push(cur);
+    return out.map((x) => x.trim());
+  };
+  const head = split(lines[0]).map((h) => h.toLowerCase());
+  return lines.slice(1).map((l) => Object.fromEntries(split(l).map((v, i) => [head[i] || 'c' + i, v])));
+}
+const csuDate = (v) => {
+  const s = String(v || '').trim();
+  let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = /^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})/.exec(s);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  return null;
+};
+export function parseCsuFuel(text) {
+  const rows = csvRows(text);
+  if (!rows.length) return {};
+  const keys = Object.keys(rows[0]);
+  const valueKey = keys.find((k) => /hodnota|value|^cena|price/.test(k)) || keys.find((k) => rows.slice(0, 50).every((r) => !r[k] || /^\d+([.,]\d+)?$/.test(r[k])));
+  const dateKeys = [...keys.filter((k) => /obdobido|do$|datum_do|konec/.test(k)), ...keys.filter((k) => /obdob[ií]|datum|t[ýy]den|week|od$/.test(k))];
+  const areaKey = keys.find((k) => /uzemi.*txt|uzemi_text|uzemi$|^uzemi_nazev/.test(k));
+  const sums = {};
+  for (const r of rows) {
+    const price = parseNum(r[valueKey]);
+    if (!(price > 5 && price < 200)) continue;
+    if (areaKey && r[areaKey] && !/česk|cesk|ČR|^CZ$/i.test(r[areaKey])) continue;
+    const textAll = keys.filter((k) => k !== valueKey && !dateKeys.includes(k)).map((k) => r[k]).join(' ');
+    // Jen běžná paliva: bez topných olejů a prémiových variant (98, aditivovaná nafta…).
+    if (/topn|olej|heating|pr[ée]mi|premium|verva|v-power|\b98\b|super plus/i.test(textAll)) continue;
+    const fuel = FUELS.find(([, re]) => re.test(textAll))?.[0];
+    if (!fuel) continue;
+    const d = dateKeys.map((k) => csuDate(r[k])).find(Boolean);
+    if (!d) continue;
+    const key = fuel + '|' + d;
+    (sums[key] ||= []).push(price);
+  }
+  const out = {};
+  for (const [key, list] of Object.entries(sums)) {
+    const [fuel, d] = key.split('|');
+    (out[fuel] ||= []).push({ d, p: Math.round((list.reduce((a, b) => a + b, 0) / list.length) * 100) / 100 });
+  }
+  for (const k of Object.keys(out)) out[k].sort((a, b) => (a.d < b.d ? -1 : 1));
+  return out;
+}
+
+// Sloučí historii: body se stejným datem přepíše, ostatní ponechá.
+export function mergeHistory(list = [], points = []) {
+  const m = new Map(list.map((x) => [x.d, x]));
+  for (const x of points) m.set(x.d, { d: x.d, p: x.p });
+  return [...m.values()].sort((a, b) => (a.d < b.d ? -1 : 1));
+}
+
+// ---------- Vyhledávání v nabídkách obchodů ----------
+// Index: [{ shop, items: [[název, cena, odkaz, ean], …] }]. Vrací skupiny stejného produktu s cenami v obchodech.
+const COLORS = new Set(['cerna', 'cerny', 'cerne', 'bila', 'bily', 'bile', 'modra', 'modry', 'zelena', 'zeleny', 'seda', 'sedy', 'stribrna', 'stribrny', 'zlata', 'zlaty', 'ruzova', 'ruzovy', 'fialova', 'cervena', 'cerveny', 'zluta', 'oranzova', 'black', 'white', 'blue', 'green', 'gray', 'grey', 'silver', 'gold', 'pink', 'purple', 'red', 'yellow', 'orange', 'navy', 'titanium', 'graphite', 'midnight', 'starlight', 'cosmic', 'deep', 'mist', 'sage', 'lavender', 'teal', 'ultramarine']);
+export function buildSearchIndex(sources) {
+  const rows = [];
+  for (const src of sources) {
+    for (const [name, price, url, ean] of src.items || []) {
+      if (!name || !(price > 0)) continue;
+      const tok = tokens(name);
+      rows.push({ name, price, url: url || '', ean: ean || '', shop: src.shop, tok, set: new Set(tok) });
+    }
+  }
+  return rows;
+}
+export function searchOffers(index, query, { limit = 20 } = {}) {
+  const q = tokens(query).slice(0, 8);
+  if (!q.length) return { groups: [], total: 0 };
+  const wantsAccessory = q.some((t) => ACCESSORY.has(t));
+  const last = q[q.length - 1];
+  const full = q.slice(0, -1);
+  const hits = [];
+  for (const r of index) {
+    // Všechna slova dotazu; poslední stačí jako začátek slova (hledání při psaní).
+    if (!full.every((t) => r.set.has(t))) continue;
+    if (!r.set.has(last) && !(last.length >= 2 && r.tok.some((t) => t.startsWith(last)))) continue;
+    if (!wantsAccessory && r.tok.some((t) => ACCESSORY.has(t))) continue;
+    hits.push(r);
+  }
+  const groups = new Map();
+  for (const r of hits) {
+    const key = r.ean || r.tok.filter((t) => !COLORS.has(t)).join('-');
+    let g = groups.get(key);
+    if (!g) groups.set(key, (g = { key, name: r.name, ean: r.ean, offers: new Map(), extra: r.tok.length - q.length }));
+    if (r.name.length < g.name.length) g.name = r.name;
+    const cur = g.offers.get(r.shop);
+    if (!cur || r.price < cur.price) g.offers.set(r.shop, { shop: r.shop, price: r.price, url: r.url, name: r.name });
+  }
+  const out = [...groups.values()].map((g) => {
+    const offers = [...g.offers.values()].sort((a, b) => a.price - b.price);
+    // Relevance: méně slov navíc, víc obchodů, shoda celé fráze na začátku názvu.
+    const starts = tokens(g.name).slice(0, q.length).join(' ') === q.join(' ');
+    return { name: g.name, ean: g.ean, minPrice: offers[0].price, maxPrice: offers[offers.length - 1].price, shops: offers.length, offers, score: (starts ? 5 : 0) + Math.min(offers.length, 6) - g.extra * 0.6 };
+  });
+  out.sort((a, b) => b.score - a.score || a.minPrice - b.minPrice);
+  return { groups: out.slice(0, limit).map(({ score, ...g }) => g), total: out.length };
 }

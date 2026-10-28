@@ -1,12 +1,12 @@
 // Service worker: offline režim (aplikace + poslední stažená data) a push notifikace hlídačů.
-const VERSION = 'pm-v5';
+const VERSION = 'pm-v6';
 const SHELL = [
   '/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png',
   '/lib/analytics.js', '/lib/categories.js', '/lib/seed.js', '/lib/dataops.js',
   '/js/core.js', '/js/i18n.js', '/js/en.js', '/js/chart.js', '/js/user.js', '/js/admin-api.js', '/js/ui.js', '/js/photos.js', '/js/share.js', '/js/tour.js',
   '/js/views/home.js', '/js/views/category.js', '/js/views/product.js', '/js/views/compare.js',
   '/js/views/favorites.js', '/js/views/portfolio.js', '/js/views/status.js', '/js/views/admin.js',
-  '/js/views/wishlist.js', '/js/views/calendar.js', '/js/views/deals.js', '/js/views/budget.js', '/icons/apple-touch-icon.png',
+  '/js/views/wishlist.js', '/js/views/calendar.js', '/js/views/deals.js', '/js/views/budget.js', '/js/views/search.js', '/icons/apple-touch-icon.png',
 ];
 
 self.addEventListener('install', (e) => {

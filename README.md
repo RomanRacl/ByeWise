@@ -136,9 +136,12 @@ Automatická aktualizace pak běží **každý den v 15:40** (Vercel Cron). Poš
 | Kryptoměny | CoinGecko, ceny přímo v Kč, bez stablecoinů | denně automaticky |
 | Auta | Tisková zpráva SDA → Import → „Tisková zpráva SDA“ | měsíčně |
 | Knihy | Žebříček SČKN/knihkupectví → Import → „Textový žebříček“ | měsíčně |
+| Pohonné hmoty: Natural 95, nafta, LPG | ČSÚ – otevřená data, týdenní průměr za celou ČR (včetně historie) | týdně automaticky |
 | Elektro, mobily, sport, kosmetika, potraviny, energie… | Feedy e-shopů, CSV/Excel nebo ručně | podle feedů denně |
 | Nábytek, pojištění | CSV/Excel nebo hromadná úprava (pojištění = průměrné roční pojistné) | měsíčně |
 | Dovolené, tarify, vstupenky, nemovitosti, ojeté vozy, pohonné hmoty | CSV/Excel nebo hromadná úprava | týdně až měsíčně |
+
+**Jak aktuální jsou ceny:** automaticky aktuální jsou jen odvětví v tabulce označená „automaticky“ – a to až po připojení Firebase a první aktualizaci (Administrace → Data a zálohy → Aktualizovat živá data). Ostatní výchozí ceny jsou **orientační** a mají štítek „ukázka“, dokud je nepřepíšeš nebo je nezačne plnit feed. Bez Firebase (ukázkový režim) je celá historie cen vygenerovaná.
 
 **Každé uložení ceny přidá dnešní záznam do historie.** Odhad potřebuje aspoň 6 záznamů za aspoň 10 dní, sezónnost aspoň rok.
 
@@ -157,6 +160,15 @@ Ceny prodejců a u těchto odvětví i **hlavní cena** (nejnižší dnešní ce
 **Formáty:** Heureka/Zboží XML (`SHOPITEM`), Google Merchant (RSS/Atom s `g:`), XML affiliate sítí (`<product>` s name/price/url nebo deeplink), CSV/TSV s hlavičkou (název, cena, odkaz, ean) i bez ní. Feed může být i zabalený `.gz`; limit 30 MB.
 
 **Hlavní cena z feedů** platí pro elektro, mobily, sport a kosmetiku. U konkrétního feedu ji vypneš zaškrtávátkem „hlavní cena“ (pak plní jen ceny prodejce).
+
+## Hledání jakéhokoli produktu
+
+Do vyhledávání (v hlavičce, na úvodní stránce, klávesa `/`) jde napsat jakýkoli produkt. Výsledek (`/hledat?q=…`, dá se sdílet):
+- **Sledujeme** – produkty z žebříčků s vývojem ceny, odhadem a skóre Kup teď / Počkej.
+- **Ceny v obchodech** – stejný produkt ze všech feedů obchodů (i mimo top 10) seskupený podle EAN nebo názvu (barvy se slučují), obchody seřazené od nejlevnějšího, rozdíl proti nejlevnějšímu a tlačítko „Do obchodu“ (s affiliate odkazem).
+- Když nic nenajde, nabídne hledání na Heurece, Zboží.cz a v Google Nákupech.
+
+Index se staví při denní aktualizaci z **celých** feedů (až 60 000 položek na feed) do Firestore kolekce `offers` a server ho drží 10 minut v paměti. Pokrytí tedy záleží na tom, kolik feedů obchodů je nastaveno: čím víc, tím víc produktů najdeš. Samostatná HTML verze hledá jen v cenách prodejců u sledovaných produktů.
 
 ## Zabezpečení
 
