@@ -1,0 +1,20 @@
+{
+  "name": "buywise",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Co se v Česku nejvíc kupuje, vývoj cen, odhady a srovnání prodejců",
+  "scripts": {
+    "dev": "node dev-server.js",
+    "test": "node --import ./tests/fake-loader.mjs --test \"tests/*.test.js\"",
+    "build:html": "node build-html.js",
+    "vapid": "node scripts/vapid.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "web-push": "^3.6.7"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

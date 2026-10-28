@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>BuyWise – Kupuj chytře. Víš, kdy cena klesne.</title>
+  <meta name="description" content="Deset nejžádanějších produktů v každém odvětví, skóre Kup teď / Počkej, vývoj cen, odhad na příští měsíc a srovnání prodejců." />
+  <meta property="og:site_name" content="BuyWise" />
+  <meta property="og:image" content="/og.jpg" />
+  <meta name="theme-color" content="#10171d" />
+  <meta name="view-transition" content="same-origin" />
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://commons.wikimedia.org" />
+  <link rel="preconnect" href="https://upload.wikimedia.org" />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="stage" aria-hidden="true"><div class="stage-img"></div><div class="stage-img"></div><div class="stage-scrim"></div></div>
+  <div id="app">
+    <a class="skip" href="#main">Přeskočit na obsah</a>
+    <header class="top" id="header"></header>
+    <div id="banner"></div>
+    <main id="main" tabindex="-1"></main>
+    <footer class="foot">
+      <p class="foot-brand"><span class="brand-word">Buy<b>Wise</b></span> <span data-t="Kupuj chytře. Víš, kdy cena klesne.">Kupuj chytře. Víš, kdy cena klesne.</span></p>
+      <p data-t="Odhady a signály vznikají statisticky z historie cen. Nejsou investičním ani finančním poradenstvím.">Odhady a signály vznikají statisticky z historie cen. Nejsou investičním ani finančním poradenstvím.</p>
+      <p id="foot-meta"></p>
+      <p id="foot-sponsor"></p>
+    </footer>
+  </div>
+  <div id="tooltip" class="tooltip" role="status" hidden></div>
+  <noscript><p style="padding:24px;color:#fff">BuyWise potřebuje zapnutý JavaScript.</p></noscript>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

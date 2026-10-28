@@ -1,0 +1,37 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [{ "path": "/api/cron", "schedule": "40 14 * * *" }],
+  "functions": {
+    "api/cron.js": { "maxDuration": 60 },
+    "api/admin.js": { "maxDuration": 60 },
+    "api/data.js": { "maxDuration": 20 },
+    "api/user.js": { "maxDuration": 15 },
+    "api/page.js": { "maxDuration": 10 },
+    "api/sitemap.js": { "maxDuration": 15 },
+    "api/v1.js": { "maxDuration": 15 }
+  },
+  "rewrites": [
+    { "source": "/produkt/:id", "destination": "/api/page?path=/produkt/:id" },
+    { "source": "/kategorie/:id", "destination": "/api/page?path=/kategorie/:id" },
+    { "source": "/:page(prani|kalendar|pozor|rozpocet)", "destination": "/api/page?path=/:page" },
+    { "source": "/(porovnat|oblibene|portfolio|stav|admin)", "destination": "/index.html" },
+    { "source": "/sitemap.xml", "destination": "/api/sitemap" },
+    { "source": "/robots.txt", "destination": "/api/sitemap?robots=1" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+      ]
+    },
+    {
+      "source": "/sw.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache" },
+        { "key": "Service-Worker-Allowed", "value": "/" }
+      ]
+    }
+  ]
+}
